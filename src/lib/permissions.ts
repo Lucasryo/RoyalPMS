@@ -35,6 +35,8 @@ export function canAccessView(
       return hasPermission(profile, 'canViewDashboard', ['admin', 'reservations', 'client', 'faturamento', 'reception', 'finance', 'eventos']);
     case 'reservations':
       return hasPermission(profile, 'canViewReservations', ['admin', 'reservations', 'client']);
+    case 'checkin':
+      return hasPermission(profile, 'canViewReservations', ['admin', 'reservations', 'reception']);
     case 'events':
       return hasPermission(profile, 'canViewEvents', ['admin', 'reservations', 'finance', 'eventos']);
     case 'guests':
