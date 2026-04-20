@@ -31,7 +31,7 @@ const CompanyTariffCard: React.FC<CompanyTariffCardProps> = ({
   copiedId,
   canManage
 }) => {
-  const allCategories = ['Executivo', 'Master', 'Suíte Presidencial'];
+  const allCategories = ['Executivo', 'Superior', 'Master', 'Suíte Presidencial'];
   const roomTypes = ['Single', 'Duplo', 'Triplo', 'Quádruplo'];
 
   const [selectedCategory, setSelectedCategory] = useState('Executivo');
@@ -147,6 +147,44 @@ const CompanyTariffCard: React.FC<CompanyTariffCardProps> = ({
   );
 };
 
+type ImportRow = {
+  company_name: string;
+  category: string;
+  room_type: string;
+  base_rate: number;
+  percentage: number;
+};
+
+// "R$ 289,00+3,75%" | "299+13,75%" | "289,00 + 3.75%" → { base, pct }
+function parseRateCell(raw: unknown): { base: number; pct: number } | null {
+  if (raw === null || raw === undefined) return null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  s = s.replace(/r\$\s*/i, '').replace(/\s+/g, '');
+  const match = s.match(/^([\d.,]+)\+([\d.,]+)%?$/);
+  if (!match) return null;
+  const toNum = (v: string) => {
+    const hasComma = v.includes(',');
+    const hasDot = v.includes('.');
+    if (hasComma && hasDot) return parseFloat(v.replace(/\./g, '').replace(',', '.'));
+    if (hasComma) return parseFloat(v.replace(',', '.'));
+    return parseFloat(v);
+  };
+  const base = toNum(match[1]);
+  const pct = toNum(match[2]);
+  if (Number.isNaN(base) || Number.isNaN(pct)) return null;
+  return { base, pct };
+}
+
+function normalizeCategory(raw: string): string | null {
+  const s = raw.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  if (s.startsWith('execut')) return 'executivo';
+  if (s.startsWith('super')) return 'superior';
+  if (s.startsWith('master')) return 'master';
+  if (s.startsWith('suite') || s.startsWith('suíte') || s.startsWith('presidencial')) return 'suite presidencial';
+  return null;
+}
+
 export default function TariffManager({ profile }: { profile: UserProfile }) {
   const [tariffs, setTariffs] = useState<Tariff[]>([]);
   const [loading, setLoading] = useState(true);
@@ -155,6 +193,11 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Import states
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [importPreview, setImportPreview] = useState<{ rows: ImportRow[]; skipped: string[] } | null>(null);
+  const [importing, setImporting] = useState(false);
+
   // Form states
   const [companyName, setCompanyName] = useState('');
   const [baseRate, setBaseRate] = useState('');
@@ -162,6 +205,114 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
   const [roomType, setRoomType] = useState('single');
   const [category, setCategory] = useState('executivo');
   const [description, setDescription] = useState('');
+
+  async function handleXlsxFile(file: File) {
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const raw = XLSX.utils.sheet_to_json<any>(ws, { header: 1, defval: '' });
+
+      const rows: ImportRow[] = [];
+      const skipped: string[] = [];
+      let lastCompany = '';
+
+      for (let i = 0; i < raw.length; i++) {
+        const r = raw[i];
+        if (!r || r.length === 0) continue;
+        const empresaRaw = String(r[0] ?? '').trim();
+        const catRaw = String(r[1] ?? '').trim();
+        const sglRaw = r[2];
+        const dblRaw = r[3];
+
+        if (empresaRaw) lastCompany = empresaRaw;
+
+        if (!catRaw) continue;
+        if (i === 0 && /empresa/i.test(empresaRaw)) continue;
+
+        const company = (lastCompany || empresaRaw).trim();
+        if (!company) {
+          skipped.push(`Linha ${i + 1}: sem empresa`);
+          continue;
+        }
+
+        const category = normalizeCategory(catRaw);
+        if (!category) {
+          skipped.push(`Linha ${i + 1} (${company}): categoria desconhecida "${catRaw}"`);
+          continue;
+        }
+
+        const sgl = parseRateCell(sglRaw);
+        const dbl = parseRateCell(dblRaw);
+
+        if (sgl) rows.push({ company_name: company, category, room_type: 'single', base_rate: sgl.base, percentage: sgl.pct });
+        else if (String(sglRaw).trim()) skipped.push(`Linha ${i + 1} (${company} ${category} SGL): formato inválido "${sglRaw}"`);
+
+        if (dbl) rows.push({ company_name: company, category, room_type: 'duplo', base_rate: dbl.base, percentage: dbl.pct });
+        else if (String(dblRaw).trim()) skipped.push(`Linha ${i + 1} (${company} ${category} DBL): formato inválido "${dblRaw}"`);
+      }
+
+      if (rows.length === 0) {
+        toast.error('Nenhuma linha válida encontrada na planilha.');
+        return;
+      }
+
+      setImportPreview({ rows, skipped });
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Erro ao ler XLSX: ' + (err.message || 'arquivo inválido'));
+    }
+  }
+
+  async function confirmImport() {
+    if (!importPreview) return;
+    setImporting(true);
+    try {
+      const now = new Date().toISOString();
+      const payload = importPreview.rows.map(r => ({
+        company_name: r.company_name,
+        category: r.category,
+        room_type: r.room_type,
+        base_rate: r.base_rate,
+        percentage: r.percentage,
+        description: null,
+        created_by: profile.id,
+        updated_at: now,
+      }));
+
+      // Upsert por (company, category, room_type) — deleta e reinsere pra manter simples
+      const companies = Array.from(new Set(payload.map(p => p.company_name)));
+      for (const comp of companies) {
+        const compPayload = payload.filter(p => p.company_name === comp);
+        const keys = compPayload.map(p => `(${p.category}/${p.room_type})`).join(',');
+        // Delete existing rows that match any (cat, room_type) we're importing
+        for (const p of compPayload) {
+          await supabase.from('tariffs')
+            .delete()
+            .eq('company_name', p.company_name)
+            .eq('category', p.category)
+            .eq('room_type', p.room_type);
+        }
+        await supabase.from('tariffs').insert(compPayload.map(p => ({ ...p, created_at: now })));
+        await logAudit({
+          user_id: profile.id,
+          user_name: profile.name,
+          action: 'Importação de tarifário via XLSX',
+          details: `${comp}: ${keys}`,
+          type: 'create',
+        });
+      }
+
+      toast.success(`${payload.length} tarifas importadas com sucesso!`);
+      setImportPreview(null);
+      fetchTariffs();
+    } catch (err: any) {
+      console.error(err);
+      toast.error('Erro ao importar: ' + (err.message || 'falha'));
+    } finally {
+      setImporting(false);
+    }
+  }
 
   useEffect(() => {
     fetchTariffs();
@@ -219,10 +370,30 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
           <p className="text-sm text-neutral-500">Mantenha os valores acordados com as empresas sempre atualizados.</p>
         </div>
         {canManage && (
-          <button onClick={() => setIsAdding(true)} className="flex items-center gap-2 bg-neutral-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-neutral-800 transition-all shadow-sm">
-            <Plus className="w-4 h-4" />
-            Nova Tarifa
-          </button>
+          <div className="flex items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) handleXlsxFile(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 bg-white border border-neutral-200 text-neutral-700 px-4 py-2 rounded-xl text-sm font-bold hover:bg-neutral-50 transition-all shadow-sm"
+            >
+              <Upload className="w-4 h-4" />
+              Importar XLSX
+            </button>
+            <button onClick={() => setIsAdding(true)} className="flex items-center gap-2 bg-neutral-900 text-white px-4 py-2 rounded-xl text-sm font-bold hover:bg-neutral-800 transition-all shadow-sm">
+              <Plus className="w-4 h-4" />
+              Nova Tarifa
+            </button>
+          </div>
         )}
       </div>
 
@@ -273,6 +444,7 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
                       <label className="text-[10px] font-bold text-neutral-500 uppercase">Categoria</label>
                       <select value={category} onChange={e => setCategory(e.target.value)} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm">
                         <option value="executivo">Executivo</option>
+                        <option value="superior">Superior</option>
                         <option value="master">Master</option>
                         <option value="suite presidencial">Suíte Presidencial</option>
                       </select>
@@ -303,6 +475,73 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
                   <button type="submit" className="flex-1 px-4 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20">Salvar Tarifa</button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {importPreview && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white w-full max-w-3xl max-h-[85vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+              <div className="p-6 border-b border-neutral-100 flex justify-between items-center">
+                <div>
+                  <h3 className="text-lg font-bold text-neutral-900">Pré-visualização da importação</h3>
+                  <p className="text-sm text-neutral-500">
+                    {importPreview.rows.length} linhas válidas
+                    {importPreview.skipped.length > 0 && ` · ${importPreview.skipped.length} ignoradas`}
+                  </p>
+                </div>
+                <button onClick={() => setImportPreview(null)} className="p-2 hover:bg-neutral-100 rounded-full"><CloseIcon className="w-5 h-5" /></button>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 space-y-4">
+                <div className="text-xs text-neutral-600 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <strong>Atenção:</strong> tarifas existentes com mesma empresa + categoria + tipo de quarto serão <strong>substituídas</strong>.
+                </div>
+
+                <div className="border border-neutral-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-neutral-50 text-neutral-600 uppercase font-bold">
+                      <tr>
+                        <th className="text-left px-3 py-2">Empresa</th>
+                        <th className="text-left px-3 py-2">Categoria</th>
+                        <th className="text-left px-3 py-2">Tipo</th>
+                        <th className="text-right px-3 py-2">Base</th>
+                        <th className="text-right px-3 py-2">Taxa</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.rows.map((r, i) => (
+                        <tr key={i} className="border-t border-neutral-100">
+                          <td className="px-3 py-2 font-medium text-neutral-900">{r.company_name}</td>
+                          <td className="px-3 py-2 capitalize text-neutral-700">{r.category}</td>
+                          <td className="px-3 py-2 uppercase text-neutral-500">{r.room_type}</td>
+                          <td className="px-3 py-2 text-right font-mono">R$ {r.base_rate.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-neutral-500">{r.percentage}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {importPreview.skipped.length > 0 && (
+                  <details className="text-xs">
+                    <summary className="font-bold text-neutral-600 cursor-pointer">Linhas ignoradas ({importPreview.skipped.length})</summary>
+                    <ul className="mt-2 space-y-1 text-neutral-500 bg-neutral-50 rounded-lg p-3">
+                      {importPreview.skipped.map((s, i) => <li key={i}>• {s}</li>)}
+                    </ul>
+                  </details>
+                )}
+              </div>
+
+              <div className="p-6 border-t border-neutral-100 flex gap-3">
+                <button type="button" onClick={() => setImportPreview(null)} disabled={importing} className="flex-1 px-4 py-2 text-sm font-bold text-neutral-600 disabled:opacity-50">Cancelar</button>
+                <button type="button" onClick={confirmImport} disabled={importing} className="flex-1 px-4 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {importing && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Importar {importPreview.rows.length} tarifas
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
