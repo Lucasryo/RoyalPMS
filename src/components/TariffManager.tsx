@@ -209,47 +209,81 @@ export default function TariffManager({ profile }: { profile: UserProfile }) {
   async function handleXlsxFile(file: File) {
     try {
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
+      const wb = XLSX.read(buffer, { type: 'array', cellNF: true });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_json<any>(ws, { header: 1, defval: '' });
 
+      // Pega o valor renderizado ("R$ 289,00+3,75%") priorizando .w (formatted text do Excel)
+      const readCell = (col: number, row: number): { value: any; display: string } => {
+        const addr = XLSX.utils.encode_cell({ c: col, r: row });
+        const cell = ws[addr];
+        if (!cell) return { value: null, display: '' };
+        const display = cell.w ?? (cell.v != null ? String(cell.v) : '');
+        return { value: cell.v, display };
+      };
+
+      // Extrai "+X,XX%" do format string do Excel (ex: "R$ 0,00\"+3,75%\"")
+      const extractPctFromFormat = (fmt: string | undefined): number | null => {
+        if (!fmt) return null;
+        const m = fmt.match(/([\d.,]+)\s*%/);
+        if (!m) return null;
+        const v = m[1].includes(',') ? parseFloat(m[1].replace(/\./g, '').replace(',', '.')) : parseFloat(m[1]);
+        return Number.isNaN(v) ? null : v;
+      };
+
+      const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:E1');
       const rows: ImportRow[] = [];
       const skipped: string[] = [];
       let lastCompany = '';
 
-      for (let i = 0; i < raw.length; i++) {
-        const r = raw[i];
-        if (!r || r.length === 0) continue;
-        const empresaRaw = String(r[0] ?? '').trim();
-        const catRaw = String(r[1] ?? '').trim();
-        const sglRaw = r[2];
-        const dblRaw = r[3];
+      for (let r = range.s.r; r <= range.e.r; r++) {
+        const empresa = readCell(0, r).display.trim();
+        const catRaw = readCell(1, r).display.trim();
+        const sglCell = readCell(2, r);
+        const dblCell = readCell(3, r);
 
-        if (empresaRaw) lastCompany = empresaRaw;
+        if (empresa) lastCompany = empresa;
 
         if (!catRaw) continue;
-        if (i === 0 && /empresa/i.test(empresaRaw)) continue;
+        if (r === 0 && /empresa/i.test(empresa)) continue;
+        if (/categoria/i.test(catRaw)) continue;
 
-        const company = (lastCompany || empresaRaw).trim();
+        const company = (lastCompany || empresa).trim();
         if (!company) {
-          skipped.push(`Linha ${i + 1}: sem empresa`);
+          skipped.push(`Linha ${r + 1}: sem empresa`);
           continue;
         }
 
         const category = normalizeCategory(catRaw);
         if (!category) {
-          skipped.push(`Linha ${i + 1} (${company}): categoria desconhecida "${catRaw}"`);
+          skipped.push(`Linha ${r + 1} (${company}): categoria desconhecida "${catRaw}"`);
           continue;
         }
 
-        const sgl = parseRateCell(sglRaw);
-        const dbl = parseRateCell(dblRaw);
+        // Resolve cada cell em { base, pct } usando 3 estratégias:
+        //  1) parse do texto renderizado ("R$ 289,00+3,75%")
+        //  2) number value + pct extraído do format ("R$ 0,00\"+3,75%\"")
+        //  3) number value apenas → pct = 0 (raro, mas evita silenciar)
+        const resolve = (col: number, raw: { value: any; display: string }): { base: number; pct: number } | null => {
+          const parsedDisplay = parseRateCell(raw.display);
+          if (parsedDisplay) return parsedDisplay;
+          if (typeof raw.value === 'number' && !Number.isNaN(raw.value)) {
+            const addr = XLSX.utils.encode_cell({ c: col, r });
+            const cell = ws[addr];
+            const pct = extractPctFromFormat(cell?.z as string | undefined);
+            if (pct !== null) return { base: raw.value, pct };
+            return { base: raw.value, pct: 0 };
+          }
+          return null;
+        };
+
+        const sgl = resolve(2, sglCell);
+        const dbl = resolve(3, dblCell);
 
         if (sgl) rows.push({ company_name: company, category, room_type: 'single', base_rate: sgl.base, percentage: sgl.pct });
-        else if (String(sglRaw).trim()) skipped.push(`Linha ${i + 1} (${company} ${category} SGL): formato inválido "${sglRaw}"`);
+        else if (sglCell.display) skipped.push(`Linha ${r + 1} (${company} ${category} SGL): formato inválido "${sglCell.display}"`);
 
         if (dbl) rows.push({ company_name: company, category, room_type: 'duplo', base_rate: dbl.base, percentage: dbl.pct });
-        else if (String(dblRaw).trim()) skipped.push(`Linha ${i + 1} (${company} ${category} DBL): formato inválido "${dblRaw}"`);
+        else if (dblCell.display) skipped.push(`Linha ${r + 1} (${company} ${category} DBL): formato inválido "${dblCell.display}"`);
       }
 
       if (rows.length === 0) {
