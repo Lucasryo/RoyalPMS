@@ -1,0 +1,5 @@
+database/
+dist_server/
+dist_desktop/
+server.ts
+electron/

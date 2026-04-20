@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, BASE_URL, fetchWithRetry } from '../supabase';
+import { supabase } from '../supabase';
 import { UserProfile, HotelEvent, Company } from '../types';
 import {
   Calendar as CalendarIcon,
@@ -76,13 +76,10 @@ export default function EventsDashboard({ profile }: { profile: UserProfile }) {
     try {
       // Sync: ensure every active event has an OS number and a linked fatura
       try {
-        await fetchWithRetry(`${BASE_URL}/events/sync-faturas`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uploader_id: profile.id }),
-        });
+        const { error: syncErr } = await supabase.rpc('sync_faturas');
+        if (syncErr) console.warn('sync_faturas rpc error (non-fatal):', syncErr);
       } catch (e) {
-        console.warn('sync-faturas failed (non-fatal):', e);
+        console.warn('sync_faturas failed (non-fatal):', e);
       }
 
       const { data: eventsData, error: eventsError } = await supabase
@@ -231,13 +228,11 @@ export default function EventsDashboard({ profile }: { profile: UserProfile }) {
     setCancelModal(null);
     setLoading(true);
     try {
-      const response = await fetchWithRetry(`${BASE_URL}/events/${event.id}/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason, cancelled_by: profile.id }),
+      const { error: rpcError } = await supabase.rpc('cancel_event', {
+        p_event_id: event.id,
+        p_reason: reason,
       });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || `Erro ${response.status}`);
+      if (rpcError) throw rpcError;
 
       toast.success('Evento e fatura cancelados com sucesso!');
       setViewingEvent(null);

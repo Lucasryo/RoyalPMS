@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { supabase, BASE_URL, fetchWithRetry } from '../supabase';
+import { supabase } from '../supabase';
 import { Company, FiscalFile, UserProfile, UserRole, UserPermissions, AuditLog, Notification } from '../types';
 import { PDFDocument } from 'pdf-lib';
 import { Plus, Upload, Building2, FileText, Search, Loader2, Download, Trash2, Users, CheckCircle2, Clock, History, Bell, BellOff, Sparkles, Calendar, Check, Edit2, X as CloseIcon, DollarSign, TrendingUp, AlertCircle, CheckCircle, PieChart as PieChartIcon, BarChart as BarChartIcon, Receipt, AlertTriangle, Send, Layers, ArrowUp, ArrowDown, FilePlus } from 'lucide-react';
@@ -1001,23 +1001,22 @@ export default function AdminDashboard({ profile, initialTab = 'documents' }: {
 
     setUploading(true); // Reuse uploading state for loading feedback
     try {
-      const response = await fetchWithRetry(`${BASE_URL}/admin/create-user`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const { data: invokeData, error: invokeError } = await supabase.functions.invoke('admin-create-user', {
+        body: {
           email: newUserEmail,
           password: newUserPassword,
           name: newUserName,
           role: newUserRole,
-          companyId: (newUserRole === 'client' || newUserRole === 'reservations') ? newUserCompanyId : null,
-          permissions: newUserPermissions
-        })
+          company_id: (newUserRole === 'client' || newUserRole === 'reservations') ? newUserCompanyId : null,
+          permissions: newUserPermissions,
+        },
       });
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || 'Erro ao cadastrar usuário');
+      if (invokeError) {
+        throw new Error((invokeError as any)?.context?.error || invokeError.message || 'Erro ao cadastrar usuário');
+      }
+      if (invokeData && (invokeData as any).error) {
+        throw new Error((invokeData as any).error);
       }
 
       setNewUserEmail('');
