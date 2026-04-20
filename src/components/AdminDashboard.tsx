@@ -1263,7 +1263,7 @@ export default function AdminDashboard({ profile, initialTab = 'documents' }: {
         </div>
       )}
 
-      {((profile.role === 'admin' || profile.role === 'faturamento' || profile.role === 'finance' || profile.role === 'reservations') && ['documents', 'banks', 'finance', 'bi', 'assembly', 'tariffs', 'registration', 'companies', 'users'].includes(initialTab)) && (
+      {((profile.role === 'admin' || profile.role === 'faturamento' || profile.role === 'finance' || profile.role === 'reservations' || profile.permissions?.canViewTariffs) && ['documents', 'banks', 'finance', 'bi', 'assembly', 'tariffs', 'registration', 'companies', 'users'].includes(initialTab)) && (
       <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl w-fit mb-6">
         {/* Sub-tabs for main "Finance" context */}
         {initialTab === 'finance' && (

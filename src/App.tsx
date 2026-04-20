@@ -15,11 +15,11 @@ import EventsDashboard from './components/EventsDashboard';
 import DashboardOverview from './components/DashboardOverview';
 import Profile from './components/Profile';
 import AuditDashboard from './components/AuditDashboard';
-import { 
-  Loader2, User as UserIcon, LogOut, Search, X as CloseIcon, 
-  Building2, FileText, Users, Sparkles, LayoutDashboard, 
+import {
+  Loader2, User as UserIcon, LogOut, Search, X as CloseIcon,
+  Building2, FileText, Users, Sparkles, LayoutDashboard,
   CalendarDays, UserCircle, Settings, Menu, Bell, Search as SearchIcon,
-  ChevronRight, Hotel, Globe, ShieldCheck, UserPlus
+  ChevronRight, Hotel, Globe, ShieldCheck, UserPlus, DollarSign
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { tryFocusElement, consumeFocusTarget } from './lib/focusTarget';
@@ -254,6 +254,7 @@ export default function App() {
       { id: 'companies' as ViewType, label: 'Empresas', icon: Building2 },
       { id: 'tracking' as ViewType, label: 'Rastreio', icon: Search },
       { id: 'finance' as ViewType, label: 'Finanças', icon: FileText },
+      { id: 'tariffs' as ViewType, label: 'Tarifas', icon: DollarSign },
       { id: 'registration' as ViewType, label: 'Cadastro', icon: UserPlus },
       { id: 'staff' as ViewType, label: 'Equipe', icon: Users },
       { id: 'audit' as ViewType, label: 'Auditoria', icon: ShieldCheck },
@@ -292,6 +293,7 @@ export default function App() {
       case 'reservations': return profile.role === 'client' ? <ClientDashboard profile={profile} initialTab="reservations" /> : <ReservationsDashboard profile={profile} />;
       case 'guests': return <AdminDashboard profile={profile} initialTab="guests" />;
       case 'tracking': return <AdminDashboard profile={profile} initialTab="tracking" />;
+      case 'tariffs': return <AdminDashboard profile={profile} initialTab="tariffs" />;
       case 'registration': return <AdminDashboard profile={profile} initialTab="registration" />;
       case 'events': return <EventsDashboard profile={profile} />;
       case 'finance': return (profile.role === 'admin' || profile.role === 'faturamento' || profile.role === 'finance' || profile.role === 'reservations') ? <AdminDashboard profile={profile} initialTab="finance" /> : <ClientDashboard profile={profile} />;
