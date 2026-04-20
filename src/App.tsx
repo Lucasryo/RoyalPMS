@@ -23,7 +23,8 @@ import {
 import { Toaster, toast } from 'sonner';
 import { tryFocusElement, consumeFocusTarget } from './lib/focusTarget';
 import { motion, AnimatePresence } from 'motion/react';
-import { User } from '@supabase/supabase-js';
+
+type User = { id: string; email?: string; [key: string]: any };
 
 type ViewType = 'dashboard' | 'reservations' | 'guests' | 'companies' | 'finance' | 'staff' | 'settings' | 'tariffs' | 'tracking' | 'registration' | 'events' | 'audit';
 
@@ -83,7 +84,7 @@ export default function App() {
         filesQuery.eq('company_id', profile.company_id);
       }
 
-      const tasks: Promise<any>[] = [
+      const tasks: PromiseLike<any>[] = [
         // Empresas: clientes não veem listagem de outras empresas
         isStaff
           ? supabase.from('companies').select('*').or(`name.ilike.%${term}%,cnpj.ilike.%${term}%`)
