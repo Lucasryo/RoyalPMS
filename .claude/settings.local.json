@@ -5,7 +5,22 @@
       "Bash(grep -v \"//.*supabase\")",
       "Bash(npm run *)",
       "Bash(grep -E \"\\\\.tsx$\")",
-      "Bash(grep -n \"\\\\\"dev\\\\\\\\|\\\\\"start\\\\\\\\|\\\\\"desktop\\\\\\\\|\\\\\"build\\\\\"\" \"C:\\\\Users\\\\Lucass\\\\Downloads\\\\GerandoVoucher\\\\package.json\")"
+      "Bash(grep -n \"\\\\\"dev\\\\\\\\|\\\\\"start\\\\\\\\|\\\\\"desktop\\\\\\\\|\\\\\"build\\\\\"\" \"C:\\\\Users\\\\Lucass\\\\Downloads\\\\GerandoVoucher\\\\package.json\")",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__list_organizations",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__list_projects",
+      "mcp__cdc07a69-3b6d-4d77-8678-77c204877b5b__list_teams",
+      "mcp__cdc07a69-3b6d-4d77-8678-77c204877b5b__list_projects",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__get_project",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__restore_project",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__list_tables",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__list_migrations",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__apply_migration",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__execute_sql",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__get_advisors",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__get_project_url",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__get_publishable_keys",
+      "mcp__19d9ee04-09d5-4c62-b445-66841c9f913b__deploy_edge_function",
+      "mcp__cdc07a69-3b6d-4d77-8678-77c204877b5b__deploy_to_vercel"
     ]
   }
 }
