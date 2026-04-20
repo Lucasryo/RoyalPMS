@@ -1,0 +1,28 @@
+name: Supabase Keepalive
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        env:
+          SUPABASE_URL: https://eavzrswylsdaybankcie.supabase.co
+          SUPABASE_ANON_KEY: sb_publishable_GG-nyJpU0rp-pPKcjIhRnQ_FiQ2JlTV
+        run: |
+          echo "Pinging Supabase to prevent auto-pause..."
+          STATUS=$(curl -s -o /tmp/resp.txt -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "${SUPABASE_URL}/rest/v1/keepalive_log?select=id&limit=1")
+          echo "HTTP status: ${STATUS}"
+          cat /tmp/resp.txt
+          if [ "${STATUS}" != "200" ] && [ "${STATUS}" != "401" ] && [ "${STATUS}" != "403" ]; then
+            echo "Unexpected status — keepalive may have failed"
+            exit 1
+          fi
+          echo "Keepalive successful (any 2xx/4xx still counts as DB activity)."
