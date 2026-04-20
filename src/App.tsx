@@ -6,6 +6,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { supabase } from './supabase';
 import { UserProfile, Company } from './types';
+import { canAccessView } from './lib/permissions';
 import Login from './components/Login';
 import AdminDashboard from './components/AdminDashboard';
 import ClientDashboard from './components/ClientDashboard';
@@ -210,6 +211,16 @@ export default function App() {
     syncProfile();
   }, [user]);
 
+  // Se a view atual foi bloqueada pelas permissões, redireciona para a primeira disponível
+  useEffect(() => {
+    if (!profile) return;
+    if (!canAccessView(profile, currentView)) {
+      const order: ViewType[] = ['dashboard', 'reservations', 'events', 'guests', 'companies', 'tracking', 'finance', 'registration', 'staff', 'audit'];
+      const next = order.find(v => canAccessView(profile, v));
+      if (next && next !== currentView) setCurrentView(next);
+    }
+  }, [profile, currentView]);
+
   // Fetch notifications for current user
   const fetchNotifications = async () => {
     if (!profile) return;
@@ -236,19 +247,19 @@ export default function App() {
     if (!profile) return [];
 
     const items = [
-      { id: 'dashboard' as ViewType, label: 'Painel', icon: LayoutDashboard, roles: ['admin', 'reservations', 'client', 'faturamento', 'reception', 'finance', 'eventos'] },
-      { id: 'reservations' as ViewType, label: 'Reservas', icon: CalendarDays, roles: ['admin', 'reservations', 'client'] },
-      { id: 'events' as ViewType, label: 'Eventos', icon: Globe, roles: ['admin', 'reservations', 'finance', 'eventos'] },
-      { id: 'guests' as ViewType, label: 'Hóspedes', icon: UserCircle, roles: ['admin', 'reservations'] },
-      { id: 'companies' as ViewType, label: 'Empresas', icon: Building2, roles: ['admin', 'eventos'] },
-      { id: 'tracking' as ViewType, label: 'Rastreio', icon: Search, roles: ['admin', 'reservations', 'faturamento', 'finance', 'reception'] },
-      { id: 'finance' as ViewType, label: 'Finanças', icon: FileText, roles: ['admin', 'client', 'faturamento', 'finance', 'reservations'] },
-      { id: 'registration' as ViewType, label: 'Cadastro', icon: UserPlus, roles: ['admin', 'faturamento'] },
-      { id: 'staff' as ViewType, label: 'Equipe', icon: Users, roles: ['admin'] },
-      { id: 'audit' as ViewType, label: 'Auditoria', icon: ShieldCheck, roles: ['admin'] },
+      { id: 'dashboard' as ViewType, label: 'Painel', icon: LayoutDashboard },
+      { id: 'reservations' as ViewType, label: 'Reservas', icon: CalendarDays },
+      { id: 'events' as ViewType, label: 'Eventos', icon: Globe },
+      { id: 'guests' as ViewType, label: 'Hóspedes', icon: UserCircle },
+      { id: 'companies' as ViewType, label: 'Empresas', icon: Building2 },
+      { id: 'tracking' as ViewType, label: 'Rastreio', icon: Search },
+      { id: 'finance' as ViewType, label: 'Finanças', icon: FileText },
+      { id: 'registration' as ViewType, label: 'Cadastro', icon: UserPlus },
+      { id: 'staff' as ViewType, label: 'Equipe', icon: Users },
+      { id: 'audit' as ViewType, label: 'Auditoria', icon: ShieldCheck },
     ];
 
-    return items.filter(item => item.roles.includes(profile.role));
+    return items.filter(item => canAccessView(profile, item.id));
   }, [profile]);
 
   if (loading) {
