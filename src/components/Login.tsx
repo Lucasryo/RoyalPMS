@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabase';
-import { LogIn, Mail, Loader2 } from 'lucide-react';
+import { LogIn, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 
@@ -22,24 +22,6 @@ export default function Login() {
     } catch (err: any) {
       console.error('Login error:', err);
       toast.error(err.message || 'E-mail ou senha incorretos.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: window.location.origin
-        }
-      });
-      if (error) throw error;
-    } catch (err: any) {
-      console.error('Google login error:', err);
-      toast.error(err.message || 'Erro ao entrar com Google.');
     } finally {
       setLoading(false);
     }
@@ -104,24 +86,6 @@ export default function Login() {
             )}
           </button>
         </form>
-
-        <div className="relative my-6">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-neutral-200"></div>
-          </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-white text-neutral-500 uppercase tracking-wider text-xs">Ou</span>
-          </div>
-        </div>
-
-        <button
-          onClick={handleGoogleLogin}
-          disabled={loading}
-          className="w-full flex items-center justify-center gap-2 bg-white border border-neutral-300 text-neutral-700 py-2 px-4 rounded-lg font-medium hover:bg-neutral-50 transition-colors disabled:opacity-50"
-        >
-          <Mail className="w-4 h-4" />
-          Entrar com Google
-        </button>
       </motion.div>
     </div>
   );
