@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc *)",
+      "Bash(grep -v \"//.*supabase\")",
+      "Bash(npm run *)",
+      "Bash(grep -E \"\\\\.tsx$\")",
+      "Bash(grep -n \"\\\\\"dev\\\\\\\\|\\\\\"start\\\\\\\\|\\\\\"desktop\\\\\\\\|\\\\\"build\\\\\"\" \"C:\\\\Users\\\\Lucass\\\\Downloads\\\\GerandoVoucher\\\\package.json\")"
+    ]
+  }
+}

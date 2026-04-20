@@ -1,0 +1,5 @@
+{
+  "name": "Portal de Documentos Royal Macaé",
+  "description": "Portal de gestão de documentos migrado para Supabase.",
+  "requestFramePermissions": []
+}
