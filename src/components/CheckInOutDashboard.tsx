@@ -77,6 +77,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
   const [folioTarget, setFolioTarget] = useState<Reservation | null>(null);
   const [checkoutTarget, setCheckoutTarget] = useState<Reservation | null>(null);
   const [notaTarget, setNotaTarget] = useState<Reservation | null>(null);
+  const [notaMode, setNotaMode] = useState<'final' | 'extract'>('final');
   const [walkInOpen, setWalkInOpen] = useState(false);
   const [allCharges, setAllCharges] = useState<FolioCharge[]>([]);
 
@@ -121,6 +122,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
     });
 
     toast.success('Lançamento adicionado.');
+    await fetchAll();
   }
 
   async function removeCharge(charge: FolioCharge) {
@@ -138,6 +140,17 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
       type: 'delete',
     });
     toast.success('Lançamento removido.');
+    await fetchAll();
+  }
+
+  function openExtract(reservation: Reservation) {
+    setNotaMode('extract');
+    setNotaTarget(reservation);
+  }
+
+  function openFinalNota(reservation: Reservation) {
+    setNotaMode('final');
+    setNotaTarget(reservation);
   }
 
   async function handleCheckIn(reservation: Reservation, roomNumber: string, checkedInAt: string) {
@@ -228,7 +241,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
 
       toast.success('Check-out concluído. Emitindo nota de hospedagem.');
       setCheckoutTarget(null);
-      setNotaTarget(reservation);
+      openFinalNota(reservation);
       fetchAll();
     } catch (err: any) {
       toast.error('Erro no check-out: ' + (err.message || 'falha'));
@@ -524,7 +537,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
                 )}
                 {activeTab === 'historico' && (
                   <button
-                    onClick={() => setNotaTarget(r)}
+                    onClick={() => openFinalNota(r)}
                     className="flex-1 flex items-center justify-center gap-2 bg-white border border-neutral-200 text-neutral-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-neutral-50"
                   >
                     <FileText className="w-3.5 h-3.5" />
@@ -560,6 +573,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             onClose={() => setFolioTarget(null)}
             onAdd={(data) => addCharge(folioTarget.id, data)}
             onRemove={removeCharge}
+            onPrintExtract={() => openExtract(folioTarget)}
           />
         )}
         {checkoutTarget && (
@@ -579,6 +593,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             companyName={companyName(notaTarget.company_id)}
             charges={chargesOf(notaTarget.id)}
             total={folioTotal(notaTarget.id)}
+            mode={notaMode}
             onClose={() => setNotaTarget(null)}
           />
         )}
@@ -596,7 +611,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
 }
 
 function FolioModal({
-  reservation, companyName, charges, total, onClose, onAdd, onRemove,
+  reservation, companyName, charges, total, onClose, onAdd, onRemove, onPrintExtract,
 }: {
   reservation: Reservation;
   companyName: string;
@@ -612,6 +627,7 @@ function FolioModal({
     room_number?: string | null;
   }) => Promise<void> | void;
   onRemove: (charge: FolioCharge) => Promise<void> | void;
+  onPrintExtract: () => void;
 }) {
   const [chargeType, setChargeType] = useState<ChargeType>('servico');
   const [description, setDescription] = useState('');
@@ -833,12 +849,23 @@ function FolioModal({
               {formatBRL(total)}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="px-5 py-2.5 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20"
-          >
-            Fechar
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onPrintExtract}
+              disabled={charges.length === 0}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-neutral-200 text-neutral-700 text-sm font-bold rounded-xl hover:bg-neutral-50 disabled:opacity-50"
+              title="Gera o extrato parcial em PDF (use 'Salvar como PDF' no diálogo de impressão)"
+            >
+              <Printer className="w-4 h-4" />
+              Imprimir extrato (PDF)
+            </button>
+            <button
+              onClick={onClose}
+              className="px-5 py-2.5 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20"
+            >
+              Fechar
+            </button>
+          </div>
         </div>
       </motion.div>
     </div>
@@ -1179,14 +1206,18 @@ function CheckOutModal({
 }
 
 function NotaHospedagemModal({
-  reservation, companyName, charges, total, onClose,
+  reservation, companyName, charges, total, onClose, mode = 'final',
 }: {
   reservation: Reservation;
   companyName: string;
   charges: FolioCharge[];
   total: number;
   onClose: () => void;
+  mode?: 'final' | 'extract';
 }) {
+  const isExtract = mode === 'extract';
+  const docTitle = isExtract ? 'Extrato Parcial' : 'Nota de Hospedagem';
+  const docDocLabel = isExtract ? 'Documento informativo · não fiscal' : 'Documento';
   const nights = Math.max(
     1,
     differenceInCalendarDays(new Date(reservation.check_out), new Date(reservation.check_in))
@@ -1238,7 +1269,12 @@ function NotaHospedagemModal({
         <div className="p-4 border-b border-neutral-100 flex justify-between items-center nota-no-print">
           <div className="flex items-center gap-2">
             <FileText className="w-5 h-5 text-neutral-900" />
-            <h3 className="text-sm font-bold text-neutral-900">Nota de Hospedagem</h3>
+            <h3 className="text-sm font-bold text-neutral-900">{docTitle}</h3>
+            {isExtract && (
+              <span className="px-2 py-0.5 bg-amber-100 text-amber-800 text-[10px] font-bold rounded uppercase tracking-widest">
+                Parcial
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -1246,7 +1282,7 @@ function NotaHospedagemModal({
               className="flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-xs font-bold rounded-lg hover:bg-neutral-800"
             >
               <Printer className="w-3.5 h-3.5" />
-              Imprimir
+              Imprimir / Salvar PDF
             </button>
             <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-full">
               <CloseIcon className="w-5 h-5" />
@@ -1265,14 +1301,20 @@ function NotaHospedagemModal({
                 </p>
               </div>
               <div className="text-right">
-                <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Documento</p>
-                <p className="text-lg font-black text-neutral-900">Nota de Hospedagem</p>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">{docDocLabel}</p>
+                <p className="text-lg font-black text-neutral-900">{docTitle}</p>
                 <p className="text-[10px] text-neutral-600 mt-1">
                   Nº {reservation.reservation_code || reservation.id.slice(0, 8).toUpperCase()}
                 </p>
                 <p className="text-[10px] text-neutral-500">
-                  Emitida em {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                  {isExtract ? 'Extraído em ' : 'Emitida em '}
+                  {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
                 </p>
+                {isExtract && (
+                  <p className="text-[9px] text-amber-700 font-bold uppercase tracking-widest mt-1">
+                    Saldo em aberto
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1385,20 +1427,28 @@ function NotaHospedagemModal({
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-12 mt-16">
-              <div>
-                <div className="border-t border-neutral-900 pt-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Assinatura do Hóspede</p>
-                  <p className="text-[10px] text-neutral-600 mt-0.5">{reservation.guest_name}</p>
+            {!isExtract && (
+              <div className="grid grid-cols-2 gap-12 mt-16">
+                <div>
+                  <div className="border-t border-neutral-900 pt-2">
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Assinatura do Hóspede</p>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">{reservation.guest_name}</p>
+                  </div>
+                </div>
+                <div>
+                  <div className="border-t border-neutral-900 pt-2">
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Recepção</p>
+                    <p className="text-[10px] text-neutral-600 mt-0.5">Hotel Royal Macaé</p>
+                  </div>
                 </div>
               </div>
-              <div>
-                <div className="border-t border-neutral-900 pt-2">
-                  <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Recepção</p>
-                  <p className="text-[10px] text-neutral-600 mt-0.5">Hotel Royal Macaé</p>
-                </div>
+            )}
+
+            {isExtract && (
+              <div className="mt-10 p-3 bg-amber-50 border border-amber-200 rounded text-[10px] text-amber-800">
+                Este documento é um <strong>extrato parcial</strong> do consumo do hóspede até o momento. Não substitui a Nota de Hospedagem emitida no check-out e não possui valor fiscal.
               </div>
-            </div>
+            )}
 
             <div className="mt-10 pt-3 border-t border-neutral-200 text-center">
               <p className="text-[9px] text-neutral-400 uppercase tracking-widest">
@@ -1420,7 +1470,7 @@ function NotaHospedagemModal({
             className="flex items-center gap-2 px-5 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20"
           >
             <Printer className="w-4 h-4" />
-            Imprimir Nota
+            {isExtract ? 'Imprimir / Salvar PDF' : 'Imprimir Nota'}
           </button>
         </div>
       </motion.div>
