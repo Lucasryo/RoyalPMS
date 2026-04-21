@@ -1,13 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabase';
 import { UserProfile, Reservation, Company, ReservationRequest } from '../types';
-import { Plus, Search, Calendar, ChevronLeft, ChevronRight, User, Hash, Clock, CheckCircle, XCircle, MoreVertical, Filter, Loader2, X as CloseIcon, Check, X, LogOut, FileText, Printer, Phone, Building2, Users } from 'lucide-react';
+import { Plus, Search, Calendar, ChevronLeft, ChevronRight, User, Hash, Clock, CheckCircle, XCircle, MoreVertical, Filter, Loader2, X as CloseIcon, Check, X, LogOut, FileText, Printer, Phone, Building2, Users, DollarSign, IdCard, Bed, AlertCircle } from 'lucide-react';
 import ReservationVoucher from './ReservationVoucher';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, startOfToday, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { logAudit, sendNotification } from '../lib/audit';
+
+type Room = {
+  id: string;
+  room_number: string;
+  floor: number;
+  category: string;
+  status: 'available' | 'occupied' | 'maintenance' | 'reserved';
+};
+
+const normalizeCategory = (c: string) =>
+  (c || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+
+const formatBRL = (v: number) =>
+  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 const slugifySegment = (value: string) =>
   value
@@ -89,6 +103,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationRequests, setReservationRequests] = useState<ReservationRequest[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -100,6 +115,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
   const [formData, setFormData] = useState({
     guest_name: '',
     contact_phone: '',
+    fiscal_data: '',
     room_number: '',
     check_in: format(new Date(), 'yyyy-MM-dd'),
     check_out: format(addDays(new Date(), 1), 'yyyy-MM-dd'),
@@ -108,6 +124,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     total_amount: 0,
     reservation_code: '',
     cost_center: '',
+    billing_obs: '',
     tariff: 0,
     category: 'executivo',
     guests_per_uh: 1,
@@ -128,17 +145,19 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
 
   async function fetchData() {
     setLoading(true);
-    const [resResult, compResult, reqResult, usersResult] = await Promise.all([
+    const [resResult, compResult, reqResult, usersResult, roomsResult] = await Promise.all([
       supabase.from('reservations').select('*').order('check_in'),
       supabase.from('companies').select('*').order('name'),
       supabase.from('reservation_requests').select('*').order('created_at', { ascending: false }),
-      supabase.from('profiles').select('*')
+      supabase.from('profiles').select('*'),
+      supabase.from('rooms').select('*').order('room_number')
     ]);
 
     if (resResult.data) setReservations(resResult.data);
     if (compResult.data) setCompanies(compResult.data);
     if (reqResult.data) setReservationRequests(reqResult.data);
     if (usersResult.data) setUsers(usersResult.data);
+    if (roomsResult.data) setRooms(roomsResult.data);
     setLoading(false);
   }
 
@@ -358,6 +377,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     setFormData({
       guest_name: '',
       contact_phone: '',
+      fiscal_data: '',
       room_number: '',
       check_in: format(new Date(), 'yyyy-MM-dd'),
       check_out: format(addDays(new Date(), 1), 'yyyy-MM-dd'),
@@ -366,6 +386,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
       total_amount: 0,
       reservation_code: '',
       cost_center: '',
+      billing_obs: '',
       tariff: 0,
       category: 'executivo',
       guests_per_uh: 1,
@@ -604,117 +625,337 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
 
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} className="bg-white w-full max-w-xl rounded-2xl overflow-hidden shadow-2xl">
-              <div className="p-6 border-b border-neutral-100 flex justify-between items-center">
-                <h3 className="text-lg font-bold text-neutral-900">Nova Reserva Manual</h3>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-neutral-100 rounded-full"><CloseIcon className="w-5 h-5" /></button>
-              </div>
-              <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
-                {/* Hóspede */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Hóspede Principal *</label>
-                    <div className="relative">
-                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <input required value={formData.guest_name} onChange={e => setFormData({ ...formData, guest_name: e.target.value })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" placeholder="Nome completo" />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Telefone de Contato</label>
-                    <div className="relative">
-                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <input value={formData.contact_phone} onChange={e => setFormData({ ...formData, contact_phone: e.target.value })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" placeholder="(00) 00000-0000" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Empresa e Categoria */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Empresa / Convênio</label>
-                    <div className="relative">
-                      <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <select value={formData.company_id} onChange={e => setFormData({ ...formData, company_id: e.target.value })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 appearance-none">
-                        <option value="">Particular (Sem Empresa)</option>
-                        {companies.map(c => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Categoria *</label>
-                    <select required value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10">
-                      <option value="executivo">Executivo</option>
-                      <option value="luxo">Luxo</option>
-                      <option value="super_luxo">Super Luxo</option>
-                      <option value="standard">Standard</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Datas */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Check-in *</label>
-                    <input type="date" required value={formData.check_in} onChange={e => setFormData({ ...formData, check_in: e.target.value })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Check-out *</label>
-                    <input type="date" required value={formData.check_out} onChange={e => setFormData({ ...formData, check_out: e.target.value })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
-                  </div>
-                </div>
-
-                {/* Quarto, Tarifa, Hóspedes */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Nº do Quarto *</label>
-                    <div className="relative">
-                      <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <input required value={formData.room_number} onChange={e => setFormData({ ...formData, room_number: e.target.value })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" placeholder="Ex: 101" />
-                    </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Tarifa Diária (R$) *</label>
-                    <input type="number" step="0.01" min="0" required value={formData.tariff || ''} onChange={e => setFormData({ ...formData, tariff: parseFloat(e.target.value) || 0 })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" placeholder="0,00" />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Hóspedes / UH</label>
-                    <div className="relative">
-                      <Users className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-                      <input type="number" min="1" max="10" value={formData.guests_per_uh} onChange={e => setFormData({ ...formData, guests_per_uh: parseInt(e.target.value) || 1 })} className="w-full pl-10 pr-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Pagamento e Centro de Custo */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Forma de Pagamento</label>
-                    <select value={formData.payment_method} onChange={e => setFormData({ ...formData, payment_method: e.target.value as 'BILLED' | 'VIRTUAL_CARD' })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10">
-                      <option value="BILLED">Faturado (Empresa)</option>
-                      <option value="VIRTUAL_CARD">Cartão / Particular</option>
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-bold text-neutral-500 uppercase">Centro de Custo</label>
-                    <input value={formData.cost_center} onChange={e => setFormData({ ...formData, cost_center: e.target.value })} className="w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" placeholder="Ex: DIRETORIA, RH..." />
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-4 border-t border-neutral-100">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 px-4 py-2.5 text-sm font-bold text-neutral-600 border border-neutral-200 rounded-xl hover:bg-neutral-50 transition-all">Cancelar</button>
-                  <button type="submit" disabled={loading} className="flex-1 px-4 py-2.5 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20 flex items-center justify-center gap-2 hover:bg-neutral-800 transition-all">
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-                    Confirmar Reserva
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
+          <NovaReservaModal
+            companies={companies}
+            rooms={rooms}
+            onCancel={() => setIsModalOpen(false)}
+            onConfirm={async (data) => {
+              setLoading(true);
+              try {
+                const resCode = generateReservationCode();
+                const nights = Math.max(1, Math.round((new Date(data.check_out).getTime() - new Date(data.check_in).getTime()) / 86400000));
+                const { error } = await supabase.from('reservations').insert([{
+                  ...data,
+                  reservation_code: resCode,
+                  status: 'CONFIRMED',
+                  total_amount: nights * data.tariff,
+                  created_at: new Date().toISOString(),
+                }]);
+                if (error) throw error;
+                toast.success('Reserva confirmada com sucesso');
+                setIsModalOpen(false);
+                fetchData();
+              } catch {
+                toast.error('Erro ao salvar reserva');
+              } finally {
+                setLoading(false);
+              }
+            }}
+          />
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function NovaReservaModal({
+  companies, rooms, onCancel, onConfirm,
+}: {
+  companies: Company[];
+  rooms: Room[];
+  onCancel: () => void;
+  onConfirm: (data: {
+    guest_name: string;
+    contact_phone: string;
+    fiscal_data: string;
+    company_id: string;
+    check_in: string;
+    check_out: string;
+    category: string;
+    tariff: number;
+    guests_per_uh: number;
+    payment_method: 'BILLED' | 'VIRTUAL_CARD';
+    room_number: string;
+    cost_center: string;
+    billing_obs: string;
+    iss_tax: number;
+    service_tax: number;
+  }) => Promise<void>;
+}) {
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd');
+
+  const [guestName, setGuestName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [fiscalData, setFiscalData] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [checkIn, setCheckIn] = useState(today);
+  const [checkOut, setCheckOut] = useState(tomorrow);
+  const [category, setCategory] = useState('executivo');
+  const [tariff, setTariff] = useState(0);
+  const [guestsPerUh, setGuestsPerUh] = useState(1);
+  const [paymentMethod, setPaymentMethod] = useState<'BILLED' | 'VIRTUAL_CARD'>('BILLED');
+  const [selectedRoom, setSelectedRoom] = useState('');
+  const [manualRoom, setManualRoom] = useState('');
+  const [costCenter, setCostCenter] = useState('');
+  const [billingObs, setBillingObs] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const nights = Math.max(1, Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000));
+  const forecast = nights * tariff;
+  const effectiveRoom = selectedRoom || manualRoom.trim();
+
+  // Para reserva futura, mostra todos os quartos (não bloqueia por disponibilidade)
+  const allRooms = rooms.filter(r => r.room_number !== '');
+  const byFloor = allRooms.reduce<Record<number, Room[]>>((acc, r) => {
+    (acc[r.floor] ??= []).push(r);
+    return acc;
+  }, {});
+
+  async function submit() {
+    if (!guestName.trim()) { toast.error('Informe o nome do hóspede.'); return; }
+    if (new Date(checkOut) <= new Date(checkIn)) { toast.error('Check-out deve ser depois do check-in.'); return; }
+    if (!(tariff > 0)) { toast.error('Informe o valor da diária.'); return; }
+    if (!effectiveRoom) { toast.error('Selecione ou informe o número da UH.'); return; }
+    setSubmitting(true);
+    try {
+      await onConfirm({
+        guest_name: guestName.trim(),
+        contact_phone: contactPhone.trim(),
+        fiscal_data: fiscalData.trim(),
+        company_id: companyId,
+        check_in: checkIn,
+        check_out: checkOut,
+        category,
+        tariff,
+        guests_per_uh: guestsPerUh,
+        payment_method: paymentMethod,
+        room_number: effectiveRoom,
+        cost_center: costCenter.trim(),
+        billing_obs: billingObs.trim(),
+        iss_tax: 5,
+        service_tax: 10,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white w-full max-w-3xl max-h-[92vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+      >
+        <div className="p-6 border-b border-neutral-100 flex justify-between items-start">
+          <div>
+            <div className="flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-blue-600" />
+              <h3 className="text-lg font-bold text-neutral-900">Nova Reserva</h3>
+            </div>
+            <p className="text-sm text-neutral-500 mt-1">
+              Registre uma reserva confirmada. O hóspede aparecerá na fila de check-in na data de entrada.
+            </p>
+          </div>
+          <button onClick={onCancel} className="p-2 hover:bg-neutral-100 rounded-full">
+            <CloseIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6 space-y-5">
+          {/* Hóspede */}
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Hóspede</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Nome completo</label>
+                <div className="relative mt-1">
+                  <User className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input type="text" value={guestName} onChange={e => setGuestName(e.target.value)} placeholder="Nome do hóspede"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Telefone</label>
+                <div className="relative mt-1">
+                  <Phone className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input type="text" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="(22) 0000-0000"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">CPF / Documento</label>
+                <div className="relative mt-1">
+                  <IdCard className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input type="text" value={fiscalData} onChange={e => setFiscalData(e.target.value)} placeholder="000.000.000-00"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">
+                  Empresa <span className="text-neutral-400 font-normal normal-case">(opcional)</span>
+                </label>
+                <div className="relative mt-1">
+                  <Building2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <select value={companyId} onChange={e => setCompanyId(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10">
+                    <option value="">Particular (Sem Empresa)</option>
+                    {companies.filter(c => c.slug !== 'walk-in').sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Estadia */}
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Estadia</h4>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Entrada</label>
+                <input type="date" value={checkIn} onChange={e => setCheckIn(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Saída</label>
+                <input type="date" value={checkOut} onChange={e => setCheckOut(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Categoria</label>
+                <select value={category} onChange={e => { setCategory(e.target.value); setSelectedRoom(''); }}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10">
+                  <option value="executivo">Executivo</option>
+                  <option value="master">Master</option>
+                  <option value="suite presidencial">Suíte Presidencial</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Hóspedes</label>
+                <input type="number" min={1} step={1} value={guestsPerUh} onChange={e => setGuestsPerUh(Number(e.target.value))}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 tabular-nums" />
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Diária (R$)</label>
+                <div className="relative mt-1">
+                  <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input type="number" min={0} step="0.01" value={tariff} onChange={e => setTariff(Number(e.target.value))}
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 tabular-nums" />
+                </div>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Pagamento</label>
+                <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value as 'BILLED' | 'VIRTUAL_CARD')}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10">
+                  <option value="BILLED">Faturado</option>
+                  <option value="VIRTUAL_CARD">Cartão / À vista</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Centro de Custo</label>
+                <input type="text" value={costCenter} onChange={e => setCostCenter(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+              </div>
+              <div className="col-span-2 sm:col-span-4">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Observações</label>
+                <textarea value={billingObs} onChange={e => setBillingObs(e.target.value)} rows={2}
+                  placeholder="Instruções especiais, restrições, solicitações..."
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 resize-none" />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-2.5">
+              <span className="text-xs text-neutral-600">
+                {nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}
+              </span>
+              <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+            </div>
+          </div>
+
+          {/* Seleção de UH */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+                UH da Reserva
+              </h4>
+              {allRooms.length > 0 && (
+                <span className="text-[10px] font-bold text-neutral-400">
+                  {allRooms.length} UH{allRooms.length === 1 ? '' : 's'} cadastrada{allRooms.length === 1 ? '' : 's'}
+                </span>
+              )}
+            </div>
+
+            {allRooms.length > 0 ? (
+              <div className="space-y-3 max-h-48 overflow-auto border border-neutral-200 rounded-xl p-3">
+                {Object.keys(byFloor).map(Number).sort((a, b) => a - b).map(floor => (
+                  <div key={floor}>
+                    <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest mb-1.5">{floor}º Andar</p>
+                    <div className="grid grid-cols-5 sm:grid-cols-8 gap-1.5">
+                      {byFloor[floor].sort((a, b) => a.room_number.localeCompare(b.room_number)).map(room => {
+                        const isSelected = selectedRoom === room.room_number;
+                        const isOccupied = room.status === 'occupied';
+                        const cat = normalizeCategory(room.category || '');
+                        const isSameCat = normalizeCategory(category) === cat;
+                        return (
+                          <button key={room.id}
+                            onClick={() => { setSelectedRoom(room.room_number); setManualRoom(''); }}
+                            title={`UH ${room.room_number}${isOccupied ? ' · ocupada' : ''}${!isSameCat ? ` · ${room.category}` : ''}`}
+                            className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg text-xs font-bold border transition-all ${
+                              isSelected
+                                ? 'bg-neutral-900 text-white border-neutral-900'
+                                : isOccupied
+                                  ? 'bg-red-50 text-red-400 border-red-200 hover:border-red-400'
+                                  : !isSameCat
+                                    ? 'bg-purple-50 text-purple-700 border-purple-200 hover:border-purple-400'
+                                    : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400'
+                            }`}
+                          >
+                            <Bed className="w-3 h-3 mb-0.5" />
+                            {room.room_number}
+                            {isOccupied && !isSelected && <span className="text-[8px] leading-none text-red-400">ocup.</span>}
+                            {!isSameCat && !isOccupied && !isSelected && <span className="text-[8px] leading-none text-purple-500">↕</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 p-4 bg-neutral-50 border border-neutral-200 rounded-xl">
+                <AlertCircle className="w-4 h-4 text-neutral-400" />
+                <p className="text-xs text-neutral-600">Nenhuma UH cadastrada ainda. Digite o número manualmente abaixo.</p>
+              </div>
+            )}
+
+            <div className="mt-3">
+              <label className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest">
+                {allRooms.length > 0 ? 'Ou informe o número da UH manualmente' : 'Número da UH'}
+              </label>
+              <div className="relative mt-1">
+                <Hash className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                <input type="text" value={manualRoom} onChange={e => { setManualRoom(e.target.value); setSelectedRoom(''); }}
+                  placeholder="Ex: 101"
+                  className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-neutral-100 flex gap-3 bg-neutral-50">
+          <button onClick={onCancel} disabled={submitting} className="flex-1 px-4 py-2 text-sm font-bold text-neutral-600 disabled:opacity-50">
+            Cancelar
+          </button>
+          <button onClick={submit} disabled={submitting || !effectiveRoom}
+            className="flex-1 px-4 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20 disabled:opacity-50 flex items-center justify-center gap-2">
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            Confirmar Reserva{effectiveRoom ? ` · UH ${effectiveRoom}` : ''}
+          </button>
+        </div>
+      </motion.div>
     </div>
   );
 }
