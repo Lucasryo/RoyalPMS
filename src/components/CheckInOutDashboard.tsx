@@ -2331,21 +2331,24 @@ function TransferirUHPanel({
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const [manualRoom, setManualRoom] = useState('');
+
   const source = active.find(r => r.id === sourceId) || null;
   const desiredCat = source ? normalizeCategory(source.category || '') : '';
-  const available = rooms.filter(
-    r => (r.status === 'available' || r.room_number === source?.room_number) &&
-      (desiredCat ? normalizeCategory(r.category) === desiredCat : true)
-  );
+  // Mostra todas as UHs exceto a atual — sem restrição de categoria nem de status
+  const available = rooms.filter(r => r.room_number !== source?.room_number);
+  const effectiveRoom = newRoom || manualRoom.trim();
 
   async function confirm() {
     if (!source) { toast.error('Selecione a reserva.'); return; }
-    if (!newRoom) { toast.error('Selecione a nova UH.'); return; }
+    if (!effectiveRoom) { toast.error('Selecione ou informe a nova UH.'); return; }
+    if (effectiveRoom === source.room_number) { toast.error('A nova UH deve ser diferente da atual.'); return; }
     setSubmitting(true);
     try {
-      await onTransfer(source, newRoom, reason.trim());
+      await onTransfer(source, effectiveRoom, reason.trim());
       setSourceId('');
       setNewRoom('');
+      setManualRoom('');
       setReason('');
     } finally {
       setSubmitting(false);
@@ -2361,7 +2364,7 @@ function TransferirUHPanel({
       <div className="flex items-start gap-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
         <AlertCircle className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
         <p className="text-[11px] text-blue-800">
-          Transferência de UH move o hóspede para outra UH da <b>mesma categoria</b>. A UH original é liberada e a nova marcada como ocupada. Todos os lançamentos existentes continuam no folio.
+          Transferência de UH move o hóspede para outra UH (mesma categoria, upgrade ou downgrade). A UH original é liberada e a nova marcada como ocupada. Todos os lançamentos existentes continuam no folio.
         </p>
       </div>
 
@@ -2401,15 +2404,17 @@ function TransferirUHPanel({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                Nova UH {CATEGORY_LABELS[desiredCat] ? `· ${CATEGORY_LABELS[desiredCat]}` : ''}
+                Nova UH
               </label>
-              <span className="text-[10px] font-bold text-neutral-400">
-                {available.length} opção{available.length === 1 ? '' : 'es'}
-              </span>
+              {available.length > 0 && (
+                <span className="text-[10px] font-bold text-neutral-400">
+                  {available.length} UH{available.length === 1 ? '' : 's'} cadastrada{available.length === 1 ? '' : 's'}
+                </span>
+              )}
             </div>
             {available.length === 0 ? (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
-                Nenhuma UH disponível nesta categoria.
+              <div className="p-3 bg-neutral-50 border border-neutral-200 rounded-xl text-xs text-neutral-600">
+                Nenhuma UH cadastrada no sistema. Digite o número da UH manualmente abaixo.
               </div>
             ) : (
               <div className="space-y-3 max-h-56 overflow-auto border border-neutral-200 rounded-xl p-3">
@@ -2420,29 +2425,50 @@ function TransferirUHPanel({
                       {byFloor[floor]
                         .sort((a, b) => a.room_number.localeCompare(b.room_number))
                         .map(room => {
-                          const active = newRoom === room.room_number;
-                          const isCurrent = room.room_number === source.room_number;
+                          const isSelected = newRoom === room.room_number;
+                          const roomCat = normalizeCategory(room.category || '');
+                          const isUpgrade = desiredCat && roomCat !== desiredCat && room.status === 'available';
+                          const isOccupied = room.status === 'occupied';
                           return (
                             <button
                               key={room.id}
-                              onClick={() => !isCurrent && setNewRoom(room.room_number)}
-                              disabled={isCurrent}
-                              className={`flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-bold border transition-all ${
-                                active
+                              onClick={() => { setNewRoom(room.room_number); setManualRoom(''); }}
+                              title={isOccupied ? `UH ${room.room_number} ocupada` : isUpgrade ? `${CATEGORY_LABELS[roomCat] || room.category} (upgrade/downgrade)` : room.room_number}
+                              className={`flex flex-col items-center justify-center py-2 px-1 rounded-lg text-xs font-bold border transition-all ${
+                                isSelected
                                   ? 'bg-neutral-900 text-white border-neutral-900'
-                                  : isCurrent
-                                    ? 'bg-neutral-100 text-neutral-400 border-neutral-200 cursor-not-allowed'
-                                    : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400'
+                                  : isOccupied
+                                    ? 'bg-red-50 text-red-400 border-red-200 hover:border-red-400'
+                                    : isUpgrade
+                                      ? 'bg-purple-50 text-purple-700 border-purple-200 hover:border-purple-400'
+                                      : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400'
                               }`}
                             >
-                              <Bed className="w-3 h-3" />
+                              <Bed className="w-3 h-3 mb-0.5" />
                               {room.room_number}
+                              {isUpgrade && !isSelected && <span className="text-[8px] leading-none text-purple-500">↕</span>}
+                              {isOccupied && !isSelected && <span className="text-[8px] leading-none text-red-400">ocup.</span>}
                             </button>
                           );
                         })}
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+            <div className="mt-3">
+              <label className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">Ou informe o número da UH manualmente</label>
+              <input
+                value={manualRoom}
+                onChange={e => { setManualRoom(e.target.value); setNewRoom(''); }}
+                placeholder="Ex: 205"
+                className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+              />
+            </div>
+            {effectiveRoom && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-neutral-600">
+                <ArrowRightLeft className="w-3.5 h-3.5 text-neutral-400" />
+                <span>UH {source?.room_number || '—'} <span className="font-bold">→</span> UH <span className="font-bold text-neutral-900">{effectiveRoom}</span></span>
               </div>
             )}
           </div>
@@ -2465,7 +2491,7 @@ function TransferirUHPanel({
               className="px-5 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20 disabled:opacity-50 flex items-center gap-2"
             >
               {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRightLeft className="w-4 h-4" />}
-              Transferir{newRoom ? ` → UH ${newRoom}` : ''}
+              Transferir{effectiveRoom ? ` → UH ${effectiveRoom}` : ''}
             </button>
           </div>
         </>
