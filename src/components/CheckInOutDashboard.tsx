@@ -1015,12 +1015,13 @@ function CheckInModal({
   onCancel: () => void;
   onConfirm: (res: Reservation, roomNumber: string, checkedInAt: string) => Promise<void> | void;
 }) {
+  const preAssignedRoom = reservation.room_number || '';
   const desiredCat = normalizeCategory(reservation.category || '');
   const available = rooms.filter(
     r => r.status === 'available' && normalizeCategory(r.category) === desiredCat
   );
 
-  const [selectedRoom, setSelectedRoom] = useState<string>('');
+  const [selectedRoom, setSelectedRoom] = useState<string>(preAssignedRoom);
   const [checkedInAt, setCheckedInAt] = useState<string>(
     format(new Date(), "yyyy-MM-dd'T'HH:mm")
   );
@@ -1117,14 +1118,50 @@ function CheckInModal({
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
-                Quartos disponíveis {CATEGORY_LABELS[desiredCat] ? `· ${CATEGORY_LABELS[desiredCat]}` : ''}
+                {preAssignedRoom ? 'UH da Reserva' : `Quartos disponíveis${CATEGORY_LABELS[desiredCat] ? ` · ${CATEGORY_LABELS[desiredCat]}` : ''}`}
               </label>
-              <span className="text-[10px] font-bold text-neutral-400">
-                {available.length} livre{available.length === 1 ? '' : 's'}
-              </span>
+              {!preAssignedRoom && (
+                <span className="text-[10px] font-bold text-neutral-400">
+                  {available.length} livre{available.length === 1 ? '' : 's'}
+                </span>
+              )}
             </div>
 
-            {available.length === 0 ? (
+            {preAssignedRoom ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                  <Bed className="w-5 h-5 text-blue-600 shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-bold text-blue-900">Quarto {preAssignedRoom}</p>
+                    <p className="text-xs text-blue-700">Quarto pré-atribuído na reserva.</p>
+                  </div>
+                  <span className="text-lg font-bold text-blue-900">{preAssignedRoom}</span>
+                </div>
+                {available.length > 0 && (
+                  <div>
+                    <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest mb-2">Ou selecione outro quarto disponível</p>
+                    <div className="space-y-3 max-h-40 overflow-auto border border-neutral-200 rounded-xl p-3">
+                      {Object.keys(byFloor).map(Number).sort((a, b) => a - b).map(floor => (
+                        <div key={floor}>
+                          <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest mb-1.5">{floor}º Andar</p>
+                          <div className="grid grid-cols-5 sm:grid-cols-6 gap-1.5">
+                            {byFloor[floor].sort((a, b) => a.room_number.localeCompare(b.room_number)).map(room => {
+                              const active = selectedRoom === room.room_number;
+                              return (
+                                <button key={room.id} onClick={() => setSelectedRoom(room.room_number)}
+                                  className={`flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-bold transition-all border ${active ? 'bg-neutral-900 text-white border-neutral-900' : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400'}`}>
+                                  <Bed className="w-3 h-3" />{room.room_number}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : available.length === 0 ? (
               <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
                 <AlertCircle className="w-5 h-5 text-amber-600" />
                 <p className="text-xs text-amber-800">
