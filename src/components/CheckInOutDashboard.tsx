@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import { UserProfile, Reservation, Company } from '../types';
-import { LogIn, LogOut, Receipt, Loader2, Search, User, Hash, Building2, CalendarDays, X as CloseIcon, Bed, Check, AlertCircle, Plus, Trash2, DollarSign } from 'lucide-react';
+import { LogIn, LogOut, Receipt, Loader2, Search, User, Hash, Building2, CalendarDays, X as CloseIcon, Bed, Check, AlertCircle, Plus, Trash2, DollarSign, Printer, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, differenceInCalendarDays } from 'date-fns';
@@ -75,6 +75,8 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
   const [searchTerm, setSearchTerm] = useState('');
   const [checkinTarget, setCheckinTarget] = useState<Reservation | null>(null);
   const [folioTarget, setFolioTarget] = useState<Reservation | null>(null);
+  const [checkoutTarget, setCheckoutTarget] = useState<Reservation | null>(null);
+  const [notaTarget, setNotaTarget] = useState<Reservation | null>(null);
   const [allCharges, setAllCharges] = useState<FolioCharge[]>([]);
 
   const chargesOf = (reservationId: string) => allCharges.filter(c => c.reservation_id === reservationId);
@@ -193,6 +195,42 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
       fetchAll();
     } catch (err: any) {
       toast.error('Erro no check-in: ' + (err.message || 'falha'));
+    }
+  }
+
+  async function handleCheckOut(reservation: Reservation, checkedOutAt: string) {
+    try {
+      const isoTs = new Date(checkedOutAt).toISOString();
+
+      const { error: e1 } = await supabase.from('reservations').update({
+        status: 'CHECKED_OUT',
+        checked_out_at: isoTs,
+        updated_at: isoTs,
+      }).eq('id', reservation.id);
+      if (e1) throw e1;
+
+      if (reservation.room_number) {
+        const { error: e2 } = await supabase.from('rooms').update({
+          status: 'available',
+          updated_at: isoTs,
+        }).eq('room_number', reservation.room_number);
+        if (e2) throw e2;
+      }
+
+      await logAudit({
+        user_id: profile.id,
+        user_name: profile.name,
+        action: 'Check-out realizado',
+        details: `${reservation.guest_name}${reservation.room_number ? ` · UH ${reservation.room_number}` : ''} · Saldo ${formatBRL(folioTotal(reservation.id))}`,
+        type: 'update',
+      });
+
+      toast.success('Check-out concluído. Emitindo nota de hospedagem.');
+      setCheckoutTarget(null);
+      setNotaTarget(reservation);
+      fetchAll();
+    } catch (err: any) {
+      toast.error('Erro no check-out: ' + (err.message || 'falha'));
     }
   }
 
@@ -357,7 +395,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
                       Folio · {formatBRL(folioTotal(r.id))}
                     </button>
                     <button
-                      onClick={() => toast.info('Fluxo de check-out em construção.')}
+                      onClick={() => setCheckoutTarget(r)}
                       className="flex-1 flex items-center justify-center gap-2 bg-neutral-900 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-neutral-800"
                     >
                       <LogOut className="w-3.5 h-3.5" />
@@ -367,10 +405,10 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
                 )}
                 {activeTab === 'historico' && (
                   <button
-                    onClick={() => toast.info('Visualização da nota em construção.')}
+                    onClick={() => setNotaTarget(r)}
                     className="flex-1 flex items-center justify-center gap-2 bg-white border border-neutral-200 text-neutral-700 px-3 py-2 rounded-lg text-xs font-bold hover:bg-neutral-50"
                   >
-                    <Receipt className="w-3.5 h-3.5" />
+                    <FileText className="w-3.5 h-3.5" />
                     Ver Nota
                   </button>
                 )}
@@ -403,6 +441,26 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             onClose={() => setFolioTarget(null)}
             onAdd={(data) => addCharge(folioTarget.id, data)}
             onRemove={removeCharge}
+          />
+        )}
+        {checkoutTarget && (
+          <CheckOutModal
+            reservation={checkoutTarget}
+            companyName={companyName(checkoutTarget.company_id)}
+            charges={chargesOf(checkoutTarget.id)}
+            total={folioTotal(checkoutTarget.id)}
+            onCancel={() => setCheckoutTarget(null)}
+            onOpenFolio={() => { setCheckoutTarget(null); setFolioTarget(checkoutTarget); }}
+            onConfirm={handleCheckOut}
+          />
+        )}
+        {notaTarget && (
+          <NotaHospedagemModal
+            reservation={notaTarget}
+            companyName={companyName(notaTarget.company_id)}
+            charges={chargesOf(notaTarget.id)}
+            total={folioTotal(notaTarget.id)}
+            onClose={() => setNotaTarget(null)}
           />
         )}
       </AnimatePresence>
@@ -839,6 +897,403 @@ function CheckInModal({
           >
             {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             Confirmar Check-in{selectedRoom ? ` · UH ${selectedRoom}` : ''}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function CheckOutModal({
+  reservation, companyName, charges, total, onCancel, onOpenFolio, onConfirm,
+}: {
+  reservation: Reservation;
+  companyName: string;
+  charges: FolioCharge[];
+  total: number;
+  onCancel: () => void;
+  onOpenFolio: () => void;
+  onConfirm: (res: Reservation, checkedOutAt: string) => Promise<void> | void;
+}) {
+  const [checkedOutAt, setCheckedOutAt] = useState<string>(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
+  const [submitting, setSubmitting] = useState(false);
+
+  const nights = Math.max(
+    1,
+    differenceInCalendarDays(new Date(reservation.check_out), new Date(reservation.check_in))
+  );
+
+  const diariasTotal = charges
+    .filter(c => c.charge_type === 'diaria')
+    .reduce((s, c) => s + Number(c.total_value || 0), 0);
+  const extrasTotal = total - diariasTotal;
+
+  async function submit() {
+    setSubmitting(true);
+    try { await onConfirm(reservation, checkedOutAt); }
+    finally { setSubmitting(false); }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white w-full max-w-xl rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+      >
+        <div className="p-6 border-b border-neutral-100 flex justify-between items-start">
+          <div>
+            <div className="flex items-center gap-2">
+              <LogOut className="w-5 h-5 text-neutral-900" />
+              <h3 className="text-lg font-bold text-neutral-900">Confirmar Check-out</h3>
+            </div>
+            <p className="text-sm text-neutral-500 mt-1">
+              Revise o folio antes de fechar a conta. A UH será liberada.
+            </p>
+          </div>
+          <button onClick={onCancel} className="p-2 hover:bg-neutral-100 rounded-full">
+            <CloseIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-5">
+          <div className="bg-neutral-50 border border-neutral-200 rounded-xl p-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <User className="w-4 h-4 text-neutral-400" />
+              <span className="text-sm font-bold text-neutral-900">{reservation.guest_name}</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-neutral-600">
+              <Building2 className="w-3.5 h-3.5 text-neutral-400" />
+              <span>{companyName}</span>
+              {reservation.room_number && (
+                <span className="ml-auto px-2 py-0.5 bg-neutral-900 text-white text-[10px] font-bold rounded">
+                  UH {reservation.room_number}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3 pt-2">
+              <div>
+                <p className="text-[9px] font-bold uppercase text-neutral-400 tracking-widest">Entrada</p>
+                <p className="text-xs font-bold text-neutral-900">
+                  {format(new Date(reservation.check_in), 'dd/MM/yyyy', { locale: ptBR })}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase text-neutral-400 tracking-widest">Saída</p>
+                <p className="text-xs font-bold text-neutral-900">
+                  {format(new Date(reservation.check_out), 'dd/MM/yyyy', { locale: ptBR })}
+                </p>
+              </div>
+              <div>
+                <p className="text-[9px] font-bold uppercase text-neutral-400 tracking-widest">Diárias</p>
+                <p className="text-xs font-bold text-neutral-900">{nights}</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+              Data e hora do check-out
+            </label>
+            <input
+              type="datetime-local"
+              value={checkedOutAt}
+              onChange={(e) => setCheckedOutAt(e.target.value)}
+              className="mt-2 w-full px-4 py-2 bg-neutral-50 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+            />
+          </div>
+
+          <div className="bg-white border border-neutral-200 rounded-xl p-4 space-y-2">
+            <div className="flex justify-between text-xs text-neutral-600">
+              <span>Diárias ({charges.filter(c => c.charge_type === 'diaria').length})</span>
+              <span className="tabular-nums font-bold">{formatBRL(diariasTotal)}</span>
+            </div>
+            <div className="flex justify-between text-xs text-neutral-600">
+              <span>Extras / serviços ({charges.filter(c => c.charge_type !== 'diaria').length})</span>
+              <span className="tabular-nums font-bold">{formatBRL(extrasTotal)}</span>
+            </div>
+            <div className="pt-2 mt-2 border-t border-neutral-100 flex justify-between items-center">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">Saldo total</span>
+              <span className={`text-xl font-bold tabular-nums ${total < 0 ? 'text-red-600' : 'text-neutral-900'}`}>
+                {formatBRL(total)}
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={onOpenFolio}
+            className="w-full flex items-center justify-center gap-2 text-xs font-bold text-neutral-600 hover:text-neutral-900 py-2"
+          >
+            <Receipt className="w-3.5 h-3.5" />
+            Revisar lançamentos do folio antes de fechar
+          </button>
+        </div>
+
+        <div className="p-6 border-t border-neutral-100 flex gap-3 bg-neutral-50">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="flex-1 px-4 py-2 text-sm font-bold text-neutral-600 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting}
+            className="flex-1 px-4 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            Fechar conta e emitir nota
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function NotaHospedagemModal({
+  reservation, companyName, charges, total, onClose,
+}: {
+  reservation: Reservation;
+  companyName: string;
+  charges: FolioCharge[];
+  total: number;
+  onClose: () => void;
+}) {
+  const nights = Math.max(
+    1,
+    differenceInCalendarDays(new Date(reservation.check_out), new Date(reservation.check_in))
+  );
+
+  const sortedCharges = [...charges].sort((a, b) => {
+    if (a.charge_date !== b.charge_date) return a.charge_date.localeCompare(b.charge_date);
+    return (a.created_at || '').localeCompare(b.created_at || '');
+  });
+
+  const diariasTotal = charges
+    .filter(c => c.charge_type === 'diaria')
+    .reduce((s, c) => s + Number(c.total_value || 0), 0);
+  const extrasTotal = total - diariasTotal;
+
+  const handlePrint = () => window.print();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm nota-modal-backdrop">
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          .nota-printable, .nota-printable * { visibility: visible !important; }
+          .nota-printable {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            max-height: none !important;
+            box-shadow: none !important;
+            border-radius: 0 !important;
+            overflow: visible !important;
+          }
+          .nota-no-print { display: none !important; }
+          .nota-modal-backdrop {
+            position: static !important;
+            background: white !important;
+            padding: 0 !important;
+          }
+        }
+      `}</style>
+
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white w-full max-w-3xl max-h-[92vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+      >
+        <div className="p-4 border-b border-neutral-100 flex justify-between items-center nota-no-print">
+          <div className="flex items-center gap-2">
+            <FileText className="w-5 h-5 text-neutral-900" />
+            <h3 className="text-sm font-bold text-neutral-900">Nota de Hospedagem</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handlePrint}
+              className="flex items-center gap-2 px-4 py-2 bg-neutral-900 text-white text-xs font-bold rounded-lg hover:bg-neutral-800"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              Imprimir
+            </button>
+            <button onClick={onClose} className="p-2 hover:bg-neutral-100 rounded-full">
+              <CloseIcon className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-auto bg-neutral-100">
+          <div className="nota-printable bg-white mx-auto my-6 shadow-sm" style={{ width: '210mm', minHeight: '297mm', padding: '18mm 16mm', fontFamily: 'Arial, Helvetica, sans-serif', color: '#111' }}>
+            <div className="flex justify-between items-start pb-4 border-b-2 border-neutral-900">
+              <div>
+                <h1 className="text-2xl font-black uppercase tracking-tight text-amber-600">Hotel Royal Macaé</h1>
+                <p className="text-[10px] text-neutral-600 mt-1 leading-snug">
+                  Rua Dom José Pereira Alves, 170 · Centro · Macaé/RJ<br />
+                  CNPJ: 00.000.000/0001-00 · (22) 0000-0000 · contato@hotelroyalmacae.com.br
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Documento</p>
+                <p className="text-lg font-black text-neutral-900">Nota de Hospedagem</p>
+                <p className="text-[10px] text-neutral-600 mt-1">
+                  Nº {reservation.reservation_code || reservation.id.slice(0, 8).toUpperCase()}
+                </p>
+                <p className="text-[10px] text-neutral-500">
+                  Emitida em {format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <h2 className="text-[10px] font-bold uppercase tracking-widest text-neutral-500 mb-2">Dados do Hóspede</h2>
+              <div className="grid grid-cols-2 gap-y-1.5 gap-x-6 text-xs">
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Hóspede</span>
+                  <span className="font-bold text-neutral-900">{reservation.guest_name}</span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Empresa</span>
+                  <span className="text-neutral-900">{companyName}</span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Apto / UH</span>
+                  <span className="font-bold text-neutral-900">{reservation.room_number || '—'}</span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Categoria</span>
+                  <span className="text-neutral-900">{CATEGORY_LABELS[normalizeCategory(reservation.category || '')] || reservation.category || '—'}</span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Entrada</span>
+                  <span className="text-neutral-900">
+                    {format(new Date(reservation.check_in), 'dd/MM/yyyy', { locale: ptBR })}
+                  </span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Saída</span>
+                  <span className="text-neutral-900">
+                    {format(new Date(reservation.check_out), 'dd/MM/yyyy', { locale: ptBR })}
+                  </span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Diárias</span>
+                  <span className="text-neutral-900">{nights}</span>
+                </div>
+                <div className="flex">
+                  <span className="w-28 text-neutral-500 font-bold uppercase text-[9px] tracking-widest">Pagamento</span>
+                  <span className="text-neutral-900">{reservation.payment_method === 'VIRTUAL_CARD' ? 'Cartão Virtual' : 'Faturado'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <h2 className="text-[10px] font-bold uppercase tracking-widest text-neutral-500 mb-2">Extrato de Consumo</h2>
+              <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr className="bg-neutral-900 text-white">
+                    <th className="text-left px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Data</th>
+                    <th className="text-left px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Tipo</th>
+                    <th className="text-left px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Descrição</th>
+                    <th className="text-right px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Qtd</th>
+                    <th className="text-right px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Unit.</th>
+                    <th className="text-right px-2 py-1.5 text-[9px] font-bold uppercase tracking-widest">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedCharges.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center py-6 text-neutral-400 italic">
+                        Sem lançamentos no folio.
+                      </td>
+                    </tr>
+                  ) : sortedCharges.map((ch, idx) => {
+                    const negative = Number(ch.total_value || 0) < 0;
+                    return (
+                      <tr key={ch.id} style={{ borderBottom: '1px solid #e5e5e5', backgroundColor: idx % 2 ? '#fafafa' : 'white' }}>
+                        <td className="px-2 py-1.5 whitespace-nowrap">
+                          {format(new Date(ch.charge_date + 'T00:00:00'), 'dd/MM/yyyy', { locale: ptBR })}
+                        </td>
+                        <td className="px-2 py-1.5 text-neutral-600">{CHARGE_TYPE_LABELS[ch.charge_type]}</td>
+                        <td className="px-2 py-1.5">{ch.description}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{ch.quantity}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{formatBRL(ch.unit_value)}</td>
+                        <td className={`px-2 py-1.5 text-right tabular-nums font-bold ${negative ? 'text-red-600' : ''}`}>
+                          {formatBRL(ch.total_value)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <div className="w-72 border-t-2 border-neutral-900 pt-3">
+                <div className="flex justify-between text-xs py-1">
+                  <span className="text-neutral-600">Diárias</span>
+                  <span className="tabular-nums font-bold">{formatBRL(diariasTotal)}</span>
+                </div>
+                <div className="flex justify-between text-xs py-1">
+                  <span className="text-neutral-600">Extras / serviços</span>
+                  <span className="tabular-nums font-bold">{formatBRL(extrasTotal)}</span>
+                </div>
+                <div className="flex justify-between items-center py-2 mt-1 border-t border-neutral-300">
+                  <span className="text-sm font-bold uppercase tracking-widest">Total Geral</span>
+                  <span className={`text-xl font-black tabular-nums ${total < 0 ? 'text-red-600' : 'text-neutral-900'}`}>
+                    {formatBRL(total)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {reservation.billing_obs && (
+              <div className="mt-6 pt-3 border-t border-neutral-200">
+                <h3 className="text-[9px] font-bold uppercase tracking-widest text-neutral-500 mb-1">Observações</h3>
+                <p className="text-[11px] text-neutral-700 whitespace-pre-line">{reservation.billing_obs}</p>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-12 mt-16">
+              <div>
+                <div className="border-t border-neutral-900 pt-2">
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Assinatura do Hóspede</p>
+                  <p className="text-[10px] text-neutral-600 mt-0.5">{reservation.guest_name}</p>
+                </div>
+              </div>
+              <div>
+                <div className="border-t border-neutral-900 pt-2">
+                  <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-500">Recepção</p>
+                  <p className="text-[10px] text-neutral-600 mt-0.5">Hotel Royal Macaé</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-10 pt-3 border-t border-neutral-200 text-center">
+              <p className="text-[9px] text-neutral-400 uppercase tracking-widest">
+                Agradecemos a sua preferência · Hotel Royal Macaé
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-neutral-100 flex justify-end gap-3 bg-white nota-no-print">
+          <button
+            onClick={onClose}
+            className="px-5 py-2 text-sm font-bold text-neutral-600"
+          >
+            Fechar
+          </button>
+          <button
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-5 py-2 bg-neutral-900 text-white text-sm font-bold rounded-xl shadow-lg shadow-neutral-900/20"
+          >
+            <Printer className="w-4 h-4" />
+            Imprimir Nota
           </button>
         </div>
       </motion.div>
