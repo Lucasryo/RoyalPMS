@@ -1238,26 +1238,60 @@ function NotaHospedagemModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm nota-modal-backdrop">
       <style>{`
+        @page {
+          size: A4 portrait;
+          margin: 0;
+        }
         @media print {
-          body * { visibility: hidden !important; }
-          .nota-printable, .nota-printable * { visibility: visible !important; }
-          .nota-printable {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 100% !important;
-            max-width: 100% !important;
-            max-height: none !important;
-            box-shadow: none !important;
-            border-radius: 0 !important;
+          html, body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #fff !important;
+            width: 210mm !important;
+            height: auto !important;
             overflow: visible !important;
           }
-          .nota-no-print { display: none !important; }
+          body * { visibility: hidden !important; }
+          /* Neutraliza transforms/animações de qualquer ancestral (motion, framer, etc.) */
+          .nota-modal-backdrop, .nota-modal-backdrop * {
+            transform: none !important;
+            animation: none !important;
+            transition: none !important;
+            filter: none !important;
+            backdrop-filter: none !important;
+            overflow: visible !important;
+            max-height: none !important;
+            height: auto !important;
+            box-shadow: none !important;
+          }
           .nota-modal-backdrop {
             position: static !important;
-            background: white !important;
+            inset: auto !important;
+            background: #fff !important;
             padding: 0 !important;
+            display: block !important;
+            overflow: visible !important;
           }
+          .nota-printable, .nota-printable * { visibility: visible !important; }
+          .nota-printable {
+            position: fixed !important;
+            left: 0 !important;
+            top: 0 !important;
+            right: auto !important;
+            bottom: auto !important;
+            width: 210mm !important;
+            max-width: 210mm !important;
+            min-height: auto !important;
+            height: auto !important;
+            margin: 0 !important;
+            padding: 15mm 14mm !important;
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            overflow: visible !important;
+            background: #fff !important;
+          }
+          .nota-no-print { display: none !important; }
         }
       `}</style>
 
