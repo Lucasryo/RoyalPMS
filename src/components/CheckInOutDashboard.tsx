@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../supabase';
 import { UserProfile, Reservation, Company } from '../types';
-import { LogIn, LogOut, Receipt, Loader2, Search, User, Hash, Building2, CalendarDays, X as CloseIcon, Bed, Check, AlertCircle, Plus, Trash2, DollarSign, Printer, FileText } from 'lucide-react';
+import { LogIn, LogOut, Receipt, Loader2, Search, User, Hash, Building2, CalendarDays, X as CloseIcon, Bed, Check, AlertCircle, Plus, Trash2, DollarSign, Printer, FileText, UserPlus, Phone, IdCard } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'motion/react';
 import { format, differenceInCalendarDays } from 'date-fns';
@@ -77,6 +77,7 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
   const [folioTarget, setFolioTarget] = useState<Reservation | null>(null);
   const [checkoutTarget, setCheckoutTarget] = useState<Reservation | null>(null);
   const [notaTarget, setNotaTarget] = useState<Reservation | null>(null);
+  const [walkInOpen, setWalkInOpen] = useState(false);
   const [allCharges, setAllCharges] = useState<FolioCharge[]>([]);
 
   const chargesOf = (reservationId: string) => allCharges.filter(c => c.reservation_id === reservationId);
@@ -234,6 +235,115 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
     }
   }
 
+  async function ensureWalkInCompany(): Promise<Company> {
+    const existing = companies.find(c => c.slug === 'walk-in');
+    if (existing) return existing;
+    const { data, error } = await supabase
+      .from('companies')
+      .insert([{ name: 'Walk-in / Particular', slug: 'walk-in', cnpj: '', status: 'active' }])
+      .select()
+      .single();
+    if (error) throw error;
+    return data as Company;
+  }
+
+  async function handleWalkIn(data: {
+    guest_name: string;
+    contact_phone?: string;
+    fiscal_data?: string;
+    company_id: string | null;
+    check_in: string;
+    check_out: string;
+    checked_in_at: string;
+    category: string;
+    tariff: number;
+    guests_per_uh: number;
+    payment_method: 'BILLED' | 'VIRTUAL_CARD';
+    room_number: string;
+    cost_center: string;
+    billing_obs?: string;
+  }) {
+    try {
+      const companyId = data.company_id ?? (await ensureWalkInCompany()).id;
+      const isoTs = new Date(data.checked_in_at).toISOString();
+      const nights = Math.max(
+        1,
+        differenceInCalendarDays(new Date(data.check_out), new Date(data.check_in))
+      );
+      const totalAmount = nights * data.tariff;
+      const reservationCode = `WI-${format(new Date(), 'yyMMdd')}-${Math.floor(Math.random() * 9000 + 1000)}`;
+
+      const { data: newRes, error: eIns } = await supabase
+        .from('reservations')
+        .insert([{
+          guest_name: data.guest_name,
+          contact_phone: data.contact_phone || '',
+          fiscal_data: data.fiscal_data || null,
+          company_id: companyId,
+          check_in: data.check_in,
+          check_out: data.check_out,
+          checked_in_at: isoTs,
+          status: 'CHECKED_IN',
+          room_number: data.room_number,
+          reservation_code: reservationCode,
+          cost_center: data.cost_center || 'WALK-IN',
+          tariff: data.tariff,
+          category: data.category,
+          guests_per_uh: data.guests_per_uh,
+          iss_tax: 0,
+          service_tax: 0,
+          payment_method: data.payment_method,
+          billing_obs: data.billing_obs || null,
+          total_amount: totalAmount,
+          requested_by: profile.id,
+        }])
+        .select()
+        .single();
+      if (eIns) throw eIns;
+
+      const { error: eRoom } = await supabase
+        .from('rooms')
+        .update({ status: 'occupied', updated_at: isoTs })
+        .eq('room_number', data.room_number);
+      if (eRoom) throw eRoom;
+
+      const charges: any[] = [];
+      for (let i = 0; i < nights; i++) {
+        const d = new Date(data.check_in);
+        d.setDate(d.getDate() + i);
+        charges.push({
+          reservation_id: newRes.id,
+          room_number: data.room_number,
+          charge_date: d.toISOString().slice(0, 10),
+          description: `Diária ${format(d, 'dd/MM/yyyy')}`,
+          quantity: 1,
+          unit_value: data.tariff,
+          charge_type: 'diaria',
+          posted_by: profile.id,
+        });
+      }
+      if (charges.length > 0) {
+        const { error: eCh } = await supabase.from('folio_charges').insert(charges);
+        if (eCh) throw eCh;
+      }
+
+      await logAudit({
+        user_id: profile.id,
+        user_name: profile.name,
+        action: 'Walk-in (passante) realizado',
+        details: `${data.guest_name} · UH ${data.room_number} · ${nights} diária(s) · ${formatBRL(totalAmount)}`,
+        type: 'create',
+      });
+
+      toast.success(`Walk-in registrado · UH ${data.room_number}`);
+      setWalkInOpen(false);
+      setActiveTab('contas');
+      fetchAll();
+    } catch (err: any) {
+      toast.error('Erro no walk-in: ' + (err.message || 'falha'));
+    }
+  }
+
   useEffect(() => {
     fetchAll();
     const channel = supabase
@@ -289,9 +399,18 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-neutral-900">Check-in / Check-out</h2>
-        <p className="text-sm text-neutral-500">Gerencie o fluxo de entrada, contas abertas e fechamento de hóspedes.</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-xl font-bold text-neutral-900">Check-in / Check-out</h2>
+          <p className="text-sm text-neutral-500">Gerencie o fluxo de entrada, contas abertas e fechamento de hóspedes.</p>
+        </div>
+        <button
+          onClick={() => setWalkInOpen(true)}
+          className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-amber-600 shadow-lg shadow-amber-500/20"
+        >
+          <UserPlus className="w-4 h-4" />
+          Walk-in / Passante
+        </button>
       </div>
 
       <div className="flex gap-1 p-1 bg-neutral-100 rounded-xl w-fit">
@@ -461,6 +580,14 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
             charges={chargesOf(notaTarget.id)}
             total={folioTotal(notaTarget.id)}
             onClose={() => setNotaTarget(null)}
+          />
+        )}
+        {walkInOpen && (
+          <WalkInModal
+            companies={companies}
+            rooms={rooms}
+            onCancel={() => setWalkInOpen(false)}
+            onConfirm={handleWalkIn}
           />
         )}
       </AnimatePresence>
@@ -1294,6 +1421,358 @@ function NotaHospedagemModal({
           >
             <Printer className="w-4 h-4" />
             Imprimir Nota
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
+function WalkInModal({
+  companies, rooms, onCancel, onConfirm,
+}: {
+  companies: Company[];
+  rooms: Room[];
+  onCancel: () => void;
+  onConfirm: (data: {
+    guest_name: string;
+    contact_phone?: string;
+    fiscal_data?: string;
+    company_id: string | null;
+    check_in: string;
+    check_out: string;
+    checked_in_at: string;
+    category: string;
+    tariff: number;
+    guests_per_uh: number;
+    payment_method: 'BILLED' | 'VIRTUAL_CARD';
+    room_number: string;
+    cost_center: string;
+    billing_obs?: string;
+  }) => Promise<void> | void;
+}) {
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const tomorrow = format(new Date(Date.now() + 86400000), 'yyyy-MM-dd');
+
+  const [guestName, setGuestName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [fiscalData, setFiscalData] = useState('');
+  const [companyId, setCompanyId] = useState<string>('');
+  const [checkIn, setCheckIn] = useState(today);
+  const [checkOut, setCheckOut] = useState(tomorrow);
+  const [checkedInAt, setCheckedInAt] = useState(format(new Date(), "yyyy-MM-dd'T'HH:mm"));
+  const [category, setCategory] = useState<string>('executivo');
+  const [tariff, setTariff] = useState<number>(0);
+  const [guestsPerUh, setGuestsPerUh] = useState<number>(1);
+  const [paymentMethod, setPaymentMethod] = useState<'BILLED' | 'VIRTUAL_CARD'>('VIRTUAL_CARD');
+  const [selectedRoom, setSelectedRoom] = useState<string>('');
+  const [costCenter, setCostCenter] = useState<string>('WALK-IN');
+  const [billingObs, setBillingObs] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const nights = Math.max(1, differenceInCalendarDays(new Date(checkOut), new Date(checkIn)));
+  const forecast = nights * tariff;
+
+  const available = rooms.filter(
+    r => r.status === 'available' && normalizeCategory(r.category) === normalizeCategory(category)
+  );
+  const byFloor = available.reduce<Record<number, Room[]>>((acc, r) => {
+    (acc[r.floor] ??= []).push(r);
+    return acc;
+  }, {});
+
+  async function submit() {
+    if (!guestName.trim()) { toast.error('Informe o nome do hóspede.'); return; }
+    if (new Date(checkOut) <= new Date(checkIn)) { toast.error('Check-out deve ser depois do check-in.'); return; }
+    if (!category) { toast.error('Selecione a categoria.'); return; }
+    if (!(tariff > 0)) { toast.error('Informe o valor da diária.'); return; }
+    if (!selectedRoom) { toast.error('Selecione um quarto disponível.'); return; }
+    setSubmitting(true);
+    try {
+      await onConfirm({
+        guest_name: guestName.trim(),
+        contact_phone: contactPhone.trim() || undefined,
+        fiscal_data: fiscalData.trim() || undefined,
+        company_id: companyId || null,
+        check_in: checkIn,
+        check_out: checkOut,
+        checked_in_at: checkedInAt,
+        category,
+        tariff,
+        guests_per_uh: guestsPerUh,
+        payment_method: paymentMethod,
+        room_number: selectedRoom,
+        cost_center: costCenter.trim() || 'WALK-IN',
+        billing_obs: billingObs.trim() || undefined,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-white w-full max-w-3xl max-h-[92vh] rounded-2xl overflow-hidden shadow-2xl flex flex-col"
+      >
+        <div className="p-6 border-b border-neutral-100 flex justify-between items-start">
+          <div>
+            <div className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-amber-600" />
+              <h3 className="text-lg font-bold text-neutral-900">Walk-in / Passante</h3>
+            </div>
+            <p className="text-sm text-neutral-500 mt-1">
+              Cadastre um hóspede sem reserva prévia. A UH será ocupada e o folio aberto com as diárias.
+            </p>
+          </div>
+          <button onClick={onCancel} className="p-2 hover:bg-neutral-100 rounded-full">
+            <CloseIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6 space-y-5">
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Hóspede</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Nome completo</label>
+                <div className="relative mt-1">
+                  <User className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input
+                    type="text"
+                    value={guestName}
+                    onChange={(e) => setGuestName(e.target.value)}
+                    placeholder="Nome do hóspede"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Telefone</label>
+                <div className="relative mt-1">
+                  <Phone className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input
+                    type="text"
+                    value={contactPhone}
+                    onChange={(e) => setContactPhone(e.target.value)}
+                    placeholder="(22) 0000-0000"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">CPF / Documento</label>
+                <div className="relative mt-1">
+                  <IdCard className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input
+                    type="text"
+                    value={fiscalData}
+                    onChange={(e) => setFiscalData(e.target.value)}
+                    placeholder="000.000.000-00"
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  />
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">
+                  Empresa <span className="text-neutral-400 font-normal normal-case">(opcional — vazio registra como Walk-in / Particular)</span>
+                </label>
+                <div className="relative mt-1">
+                  <Building2 className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <select
+                    value={companyId}
+                    onChange={(e) => setCompanyId(e.target.value)}
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                  >
+                    <option value="">Walk-in / Particular</option>
+                    {companies
+                      .filter(c => c.slug !== 'walk-in')
+                      .sort((a, b) => a.name.localeCompare(b.name))
+                      .map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Estadia</h4>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Entrada</label>
+                <input
+                  type="date"
+                  value={checkIn}
+                  onChange={(e) => setCheckIn(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Saída</label>
+                <input
+                  type="date"
+                  value={checkOut}
+                  onChange={(e) => setCheckOut(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Check-in (data e hora)</label>
+                <input
+                  type="datetime-local"
+                  value={checkedInAt}
+                  onChange={(e) => setCheckedInAt(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Categoria</label>
+                <select
+                  value={category}
+                  onChange={(e) => { setCategory(e.target.value); setSelectedRoom(''); }}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                >
+                  <option value="executivo">Executivo</option>
+                  <option value="master">Master</option>
+                  <option value="suite presidencial">Suíte Presidencial</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Hóspedes</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={guestsPerUh}
+                  onChange={(e) => setGuestsPerUh(Number(e.target.value))}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Diária (R$)</label>
+                <div className="relative mt-1">
+                  <DollarSign className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400" />
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={tariff}
+                    onChange={(e) => setTariff(Number(e.target.value))}
+                    className="w-full pl-8 pr-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 tabular-nums"
+                  />
+                </div>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Pagamento</label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value as 'BILLED' | 'VIRTUAL_CARD')}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                >
+                  <option value="VIRTUAL_CARD">Cartão / À vista</option>
+                  <option value="BILLED">Faturado</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Centro de Custo</label>
+                <input
+                  type="text"
+                  value={costCenter}
+                  onChange={(e) => setCostCenter(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10"
+                />
+              </div>
+              <div className="col-span-2 sm:col-span-4">
+                <label className="text-[9px] font-bold text-neutral-500 uppercase tracking-widest">Observações</label>
+                <textarea
+                  value={billingObs}
+                  onChange={(e) => setBillingObs(e.target.value)}
+                  rows={2}
+                  placeholder="Instruções de cobrança, restrições alimentares, etc."
+                  className="mt-1 w-full px-3 py-2 bg-white border border-neutral-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/10 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-2.5">
+              <span className="text-xs text-neutral-600">
+                {nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}
+              </span>
+              <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">
+                Quartos disponíveis · {CATEGORY_LABELS[normalizeCategory(category)]}
+              </h4>
+              <span className="text-[10px] font-bold text-neutral-400">
+                {available.length} livre{available.length === 1 ? '' : 's'}
+              </span>
+            </div>
+
+            {available.length === 0 ? (
+              <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                <AlertCircle className="w-5 h-5 text-amber-600" />
+                <p className="text-xs text-amber-800">
+                  Nenhum quarto disponível nesta categoria. Altere a categoria ou libere uma UH.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-48 overflow-auto border border-neutral-200 rounded-xl p-3">
+                {Object.keys(byFloor).map(Number).sort((a, b) => a - b).map(floor => (
+                  <div key={floor}>
+                    <p className="text-[9px] font-bold text-neutral-400 uppercase tracking-widest mb-1.5">
+                      {floor}º Andar
+                    </p>
+                    <div className="grid grid-cols-5 sm:grid-cols-8 gap-1.5">
+                      {byFloor[floor]
+                        .sort((a, b) => a.room_number.localeCompare(b.room_number))
+                        .map(room => {
+                          const active = selectedRoom === room.room_number;
+                          return (
+                            <button
+                              key={room.id}
+                              onClick={() => setSelectedRoom(room.room_number)}
+                              className={`flex items-center justify-center gap-1 py-2 rounded-lg text-xs font-bold transition-all border ${
+                                active
+                                  ? 'bg-neutral-900 text-white border-neutral-900'
+                                  : 'bg-white text-neutral-700 border-neutral-200 hover:border-neutral-400'
+                              }`}
+                            >
+                              <Bed className="w-3 h-3" />
+                              {room.room_number}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-neutral-100 flex gap-3 bg-neutral-50">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="flex-1 px-4 py-2 text-sm font-bold text-neutral-600 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={submit}
+            disabled={submitting || !selectedRoom}
+            className="flex-1 px-4 py-2 bg-amber-500 text-white text-sm font-bold rounded-xl shadow-lg shadow-amber-500/20 disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+            Registrar walk-in{selectedRoom ? ` · UH ${selectedRoom}` : ''}
           </button>
         </div>
       </motion.div>
