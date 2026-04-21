@@ -699,10 +699,29 @@ function NovaReservaModal({
   const [manualRoom, setManualRoom] = useState('');
   const [costCenter, setCostCenter] = useState('');
   const [billingObs, setBillingObs] = useState('');
+  const [issEnabled, setIssEnabled] = useState(false);
+  const [serviceEnabled, setServiceEnabled] = useState(false);
+  const [issRate, setIssRate] = useState(3.75);
+  const [serviceRate, setServiceRate] = useState(10);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    supabase.from('app_settings').select('value').eq('id', 'fiscal_settings').maybeSingle().then(({ data }) => {
+      if (data?.value) {
+        try {
+          const p = JSON.parse(data.value);
+          if (p.iss_rate != null) setIssRate(p.iss_rate);
+          if (p.service_tax_rate != null) setServiceRate(p.service_tax_rate);
+        } catch { /* usa defaults */ }
+      }
+    });
+  }, []);
+
   const nights = Math.max(1, Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000));
-  const forecast = nights * tariff;
+  const subtotal = nights * tariff;
+  const issAmount = issEnabled ? subtotal * issRate / 100 : 0;
+  const serviceAmount = serviceEnabled ? subtotal * serviceRate / 100 : 0;
+  const forecast = subtotal + issAmount + serviceAmount;
   const effectiveRoom = selectedRoom || manualRoom.trim();
 
   // Para reserva futura, mostra todos os quartos (não bloqueia por disponibilidade)
@@ -733,8 +752,8 @@ function NovaReservaModal({
         room_number: effectiveRoom,
         cost_center: costCenter.trim(),
         billing_obs: billingObs.trim(),
-        iss_tax: 5,
-        service_tax: 10,
+        iss_tax: issEnabled ? issRate : 0,
+        service_tax: serviceEnabled ? serviceRate : 0,
       });
     } finally {
       setSubmitting(false);
@@ -867,11 +886,56 @@ function NovaReservaModal({
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-2.5">
-              <span className="text-xs text-neutral-600">
-                {nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}
-              </span>
-              <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+            <div className="mt-3 bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-neutral-600">
+                <span>{nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}</span>
+                <span className="tabular-nums">{formatBRL(subtotal)}</span>
+              </div>
+              {issEnabled && <div className="flex items-center justify-between text-xs text-neutral-500">
+                <span>ISS ({issRate}%)</span>
+                <span className="tabular-nums">+ {formatBRL(issAmount)}</span>
+              </div>}
+              {serviceEnabled && <div className="flex items-center justify-between text-xs text-neutral-500">
+                <span>Taxa de Serviço ({serviceRate}%)</span>
+                <span className="tabular-nums">+ {formatBRL(serviceAmount)}</span>
+              </div>}
+              <div className="flex items-center justify-between pt-1.5 border-t border-neutral-200">
+                <span className="text-xs font-bold text-neutral-700">Total previsto</span>
+                <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Impostos */}
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Impostos e Taxas</h4>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setIssEnabled(v => !v)}
+                className={`flex-1 flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all ${issEnabled ? 'border-blue-500 bg-blue-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}
+              >
+                <div className="text-left">
+                  <p className={`text-xs font-bold ${issEnabled ? 'text-blue-700' : 'text-neutral-700'}`}>ISS</p>
+                  <p className={`text-[10px] ${issEnabled ? 'text-blue-500' : 'text-neutral-400'}`}>{issRate}% · Municipal</p>
+                </div>
+                <div className={`w-9 h-5 rounded-full transition-all relative ${issEnabled ? 'bg-blue-500' : 'bg-neutral-200'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${issEnabled ? 'left-4' : 'left-0.5'}`} />
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setServiceEnabled(v => !v)}
+                className={`flex-1 flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all ${serviceEnabled ? 'border-purple-500 bg-purple-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}
+              >
+                <div className="text-left">
+                  <p className={`text-xs font-bold ${serviceEnabled ? 'text-purple-700' : 'text-neutral-700'}`}>Taxa Serviço</p>
+                  <p className={`text-[10px] ${serviceEnabled ? 'text-purple-500' : 'text-neutral-400'}`}>{serviceRate}% · Hoteleiro</p>
+                </div>
+                <div className={`w-9 h-5 rounded-full transition-all relative ${serviceEnabled ? 'bg-purple-500' : 'bg-neutral-200'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${serviceEnabled ? 'left-4' : 'left-0.5'}`} />
+                </div>
+              </button>
             </div>
           </div>
 

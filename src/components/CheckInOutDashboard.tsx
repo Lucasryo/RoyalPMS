@@ -282,6 +282,8 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
     room_number: string;
     cost_center: string;
     billing_obs?: string;
+    iss_tax?: number;
+    service_tax?: number;
   }) {
     try {
       const companyId = data.company_id ?? (await ensureWalkInCompany()).id;
@@ -310,8 +312,8 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
           tariff: data.tariff,
           category: data.category,
           guests_per_uh: data.guests_per_uh,
-          iss_tax: 0,
-          service_tax: 0,
+          iss_tax: data.iss_tax ?? 0,
+          service_tax: data.service_tax ?? 0,
           payment_method: data.payment_method,
           billing_obs: data.billing_obs || null,
           total_amount: totalAmount,
@@ -976,14 +978,34 @@ function FolioModal({
           </div>
         </div>
 
-        <div className="p-6 border-t border-neutral-100 flex items-center justify-between bg-white">
-          <div>
-            <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Saldo do folio</p>
-            <p className={`text-2xl font-bold tabular-nums ${total < 0 ? 'text-red-600' : 'text-neutral-900'}`}>
-              {formatBRL(total)}
-            </p>
+        <div className="p-6 border-t border-neutral-100 bg-white">
+          <div className="flex items-end justify-between gap-4">
+            <div className="space-y-1 min-w-0 flex-1">
+              <div className="flex items-center justify-between text-xs text-neutral-500">
+                <span>Subtotal lançamentos</span>
+                <span className="tabular-nums">{formatBRL(total)}</span>
+              </div>
+              {Number(reservation.iss_tax || 0) > 0 && (
+                <div className="flex items-center justify-between text-xs text-blue-600">
+                  <span>ISS ({reservation.iss_tax}%)</span>
+                  <span className="tabular-nums">+ {formatBRL(total * Number(reservation.iss_tax) / 100)}</span>
+                </div>
+              )}
+              {Number(reservation.service_tax || 0) > 0 && (
+                <div className="flex items-center justify-between text-xs text-purple-600">
+                  <span>Taxa de Serviço ({reservation.service_tax}%)</span>
+                  <span className="tabular-nums">+ {formatBRL(total * Number(reservation.service_tax) / 100)}</span>
+                </div>
+              )}
+              <div className="pt-1.5 border-t border-neutral-200 flex items-center justify-between">
+                <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Total com impostos</p>
+                <p className={`text-2xl font-bold tabular-nums ${total < 0 ? 'text-red-600' : 'text-neutral-900'}`}>
+                  {formatBRL(total * (1 + Number(reservation.iss_tax || 0) / 100 + Number(reservation.service_tax || 0) / 100))}
+                </p>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-neutral-100">
             <button
               onClick={onPrintExtract}
               disabled={charges.length === 0}
@@ -1704,6 +1726,8 @@ function WalkInModal({
     room_number: string;
     cost_center: string;
     billing_obs?: string;
+    iss_tax?: number;
+    service_tax?: number;
   }) => Promise<void> | void;
 }) {
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -1723,10 +1747,29 @@ function WalkInModal({
   const [selectedRoom, setSelectedRoom] = useState<string>('');
   const [costCenter, setCostCenter] = useState<string>('WALK-IN');
   const [billingObs, setBillingObs] = useState('');
+  const [issEnabled, setIssEnabled] = useState(false);
+  const [serviceEnabled, setServiceEnabled] = useState(false);
+  const [issRate, setIssRate] = useState(3.75);
+  const [serviceRate, setServiceRate] = useState(10);
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    supabase.from('app_settings').select('value').eq('id', 'fiscal_settings').maybeSingle().then(({ data }) => {
+      if (data?.value) {
+        try {
+          const p = JSON.parse(data.value);
+          if (p.iss_rate != null) setIssRate(p.iss_rate);
+          if (p.service_tax_rate != null) setServiceRate(p.service_tax_rate);
+        } catch { /* usa defaults */ }
+      }
+    });
+  }, []);
+
   const nights = Math.max(1, differenceInCalendarDays(new Date(checkOut), new Date(checkIn)));
-  const forecast = nights * tariff;
+  const subtotal = nights * tariff;
+  const issAmount = issEnabled ? subtotal * issRate / 100 : 0;
+  const serviceAmount = serviceEnabled ? subtotal * serviceRate / 100 : 0;
+  const forecast = subtotal + issAmount + serviceAmount;
 
   const available = rooms.filter(
     r => r.status === 'available' && normalizeCategory(r.category) === normalizeCategory(category)
@@ -1759,6 +1802,8 @@ function WalkInModal({
         room_number: selectedRoom,
         cost_center: costCenter.trim() || 'WALK-IN',
         billing_obs: billingObs.trim() || undefined,
+        iss_tax: issEnabled ? issRate : 0,
+        service_tax: serviceEnabled ? serviceRate : 0,
       });
     } finally {
       setSubmitting(false);
@@ -1953,11 +1998,56 @@ function WalkInModal({
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-between bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-2.5">
-              <span className="text-xs text-neutral-600">
-                {nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}
-              </span>
-              <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+            <div className="mt-3 bg-neutral-50 border border-neutral-200 rounded-lg px-4 py-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-neutral-600">
+                <span>{nights} diária{nights === 1 ? '' : 's'} × {formatBRL(tariff)}</span>
+                <span className="tabular-nums">{formatBRL(subtotal)}</span>
+              </div>
+              {issEnabled && <div className="flex items-center justify-between text-xs text-neutral-500">
+                <span>ISS ({issRate}%)</span>
+                <span className="tabular-nums">+ {formatBRL(issAmount)}</span>
+              </div>}
+              {serviceEnabled && <div className="flex items-center justify-between text-xs text-neutral-500">
+                <span>Taxa de Serviço ({serviceRate}%)</span>
+                <span className="tabular-nums">+ {formatBRL(serviceAmount)}</span>
+              </div>}
+              <div className="flex items-center justify-between pt-1.5 border-t border-neutral-200">
+                <span className="text-xs font-bold text-neutral-700">Total previsto</span>
+                <span className="text-sm font-bold text-neutral-900 tabular-nums">{formatBRL(forecast)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Impostos */}
+          <div>
+            <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-3">Impostos e Taxas</h4>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setIssEnabled(v => !v)}
+                className={`flex-1 flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all ${issEnabled ? 'border-blue-500 bg-blue-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}
+              >
+                <div className="text-left">
+                  <p className={`text-xs font-bold ${issEnabled ? 'text-blue-700' : 'text-neutral-700'}`}>ISS</p>
+                  <p className={`text-[10px] ${issEnabled ? 'text-blue-500' : 'text-neutral-400'}`}>{issRate}% · Municipal</p>
+                </div>
+                <div className={`w-9 h-5 rounded-full transition-all relative ${issEnabled ? 'bg-blue-500' : 'bg-neutral-200'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${issEnabled ? 'left-4' : 'left-0.5'}`} />
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setServiceEnabled(v => !v)}
+                className={`flex-1 flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all ${serviceEnabled ? 'border-purple-500 bg-purple-50' : 'border-neutral-200 bg-white hover:border-neutral-300'}`}
+              >
+                <div className="text-left">
+                  <p className={`text-xs font-bold ${serviceEnabled ? 'text-purple-700' : 'text-neutral-700'}`}>Taxa Serviço</p>
+                  <p className={`text-[10px] ${serviceEnabled ? 'text-purple-500' : 'text-neutral-400'}`}>{serviceRate}% · Hoteleiro</p>
+                </div>
+                <div className={`w-9 h-5 rounded-full transition-all relative ${serviceEnabled ? 'bg-purple-500' : 'bg-neutral-200'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all ${serviceEnabled ? 'left-4' : 'left-0.5'}`} />
+                </div>
+              </button>
             </div>
           </div>
 
