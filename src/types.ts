@@ -171,6 +171,9 @@ export interface Reservation {
   cancelled_at?: string;
   no_show_at?: string;
   no_show_reason?: string;
+  checked_in_at?: string;
+  checked_out_at?: string;
+  updated_at?: string;
   company_id: string;
   total_amount: number;
   created_at: string;
