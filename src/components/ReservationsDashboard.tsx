@@ -99,7 +99,7 @@ const buildAutoInvoiceHtml = ({
 </html>`;
 
 export default function ReservationsDashboard({ profile }: { profile: UserProfile }) {
-  const [activeSubTab, setActiveSubTab] = useState<'map' | 'requests'>('requests');
+  const [activeSubTab, setActiveSubTab] = useState<'map' | 'requests'>('map');
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationRequests, setReservationRequests] = useState<ReservationRequest[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -373,6 +373,63 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     }
   };
 
+  async function handleCancelReservation(reservation: Reservation) {
+    const reason = window.prompt(`Motivo do cancelamento da reserva ${reservation.reservation_code} (${reservation.guest_name}):`);
+    if (reason === null) return;
+    if (!reason.trim()) { toast.error('Informe o motivo do cancelamento.'); return; }
+    try {
+      const isoTs = new Date().toISOString();
+      const { error } = await supabase.from('reservations').update({
+        status: 'CANCELLED',
+        cancel_reason: reason.trim(),
+        cancelled_at: isoTs,
+        updated_at: isoTs,
+      }).eq('id', reservation.id);
+      if (error) throw error;
+
+      await logAudit({
+        user_id: profile.id,
+        user_name: profile.name,
+        action: 'Reserva cancelada',
+        details: `${reservation.guest_name} · ${reservation.reservation_code} · Motivo: ${reason.trim()}`,
+        type: 'update',
+      });
+
+      toast.success('Reserva cancelada.');
+      fetchData();
+    } catch (err: any) {
+      toast.error('Erro ao cancelar reserva: ' + (err?.message || 'falha'));
+    }
+  }
+
+  async function handleNoShowReservation(reservation: Reservation) {
+    const reason = window.prompt(`Marcar como No Show — reserva ${reservation.reservation_code} (${reservation.guest_name}). Motivo/Observação:`);
+    if (reason === null) return;
+    try {
+      const isoTs = new Date().toISOString();
+      const { error } = await supabase.from('reservations').update({
+        status: 'NO_SHOW',
+        no_show_at: isoTs,
+        no_show_reason: reason.trim() || null,
+        updated_at: isoTs,
+      }).eq('id', reservation.id);
+      if (error) throw error;
+
+      await logAudit({
+        user_id: profile.id,
+        user_name: profile.name,
+        action: 'Reserva marcada como No Show',
+        details: `${reservation.guest_name} · ${reservation.reservation_code}${reason.trim() ? ` · ${reason.trim()}` : ''}`,
+        type: 'update',
+      });
+
+      toast.success('Reserva marcada como No Show.');
+      fetchData();
+    } catch (err: any) {
+      toast.error('Erro ao marcar No Show: ' + (err?.message || 'falha'));
+    }
+  }
+
   function resetForm() {
     setFormData({
       guest_name: '',
@@ -402,20 +459,22 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
     r.reservation_code.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const statusColors = {
-    PENDING: 'bg-amber-100 text-amber-700',
-    CONFIRMED: 'bg-blue-100 text-blue-700',
-    CHECKED_IN: 'bg-green-100 text-green-700',
+  const statusColors: Record<Reservation['status'], string> = {
+    PENDING: 'bg-emerald-100 text-emerald-700',
+    CONFIRMED: 'bg-emerald-100 text-emerald-700',
+    CHECKED_IN: 'bg-blue-100 text-blue-700',
     CHECKED_OUT: 'bg-neutral-100 text-neutral-600',
-    CANCELLED: 'bg-red-100 text-red-700'
+    CANCELLED: 'bg-red-100 text-red-700',
+    NO_SHOW: 'bg-orange-100 text-orange-700',
   };
 
-  const statusLabels = {
-    PENDING: 'Pendente',
-    CONFIRMED: 'Confirmada',
-    CHECKED_IN: 'In House',
-    CHECKED_OUT: 'Faturada',
-    CANCELLED: 'Cancelada'
+  const statusLabels: Record<Reservation['status'], string> = {
+    PENDING: 'Ativa',
+    CONFIRMED: 'Ativa',
+    CHECKED_IN: 'Em Hospedagem',
+    CHECKED_OUT: 'Finalizada',
+    CANCELLED: 'Cancelada',
+    NO_SHOW: 'No Show',
   };
 
   return (
@@ -593,7 +652,25 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                         >
                           <Printer className="w-4 h-4" />
                         </button>
-                        {res.status !== 'CHECKED_OUT' && (
+                        {(res.status === 'CONFIRMED' || res.status === 'PENDING') && (
+                          <>
+                            <button
+                              onClick={() => handleNoShowReservation(res)}
+                              className="p-2 text-neutral-400 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-all"
+                              title="Marcar como No Show"
+                            >
+                              <XCircle className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleCancelReservation(res)}
+                              className="p-2 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+                              title="Cancelar reserva"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {res.status === 'CHECKED_IN' && (
                           <button
                             onClick={() => handleCheckoutReservation(res)}
                             className="p-2 text-neutral-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
@@ -602,9 +679,6 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
                             <LogOut className="w-4 h-4" />
                           </button>
                         )}
-                        <button className="p-2 text-neutral-400 hover:text-neutral-900 transition-colors">
-                          <MoreVertical className="w-4 h-4" />
-                        </button>
                       </div>
                     </td>
                   </tr>

@@ -166,7 +166,11 @@ export interface Reservation {
   room_number?: string;
   check_in: string;
   check_out: string;
-  status: 'PENDING' | 'CONFIRMED' | 'CHECKED_IN' | 'CHECKED_OUT' | 'CANCELLED';
+  status: 'PENDING' | 'CONFIRMED' | 'CHECKED_IN' | 'CHECKED_OUT' | 'CANCELLED' | 'NO_SHOW';
+  cancel_reason?: string;
+  cancelled_at?: string;
+  no_show_at?: string;
+  no_show_reason?: string;
   company_id: string;
   total_amount: number;
   created_at: string;
