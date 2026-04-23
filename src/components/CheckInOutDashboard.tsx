@@ -491,11 +491,22 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
 
   const isSystemReservation = (r: Reservation) => SYSTEM_RESERVATION_CODES.has(r.reservation_code || '');
 
+  const operationDayISO = format(new Date(), 'yyyy-MM-dd');
+  const isActiveReservation = (r: Reservation) =>
+    (r.status === 'CONFIRMED' || r.status === 'PENDING') && !isSystemReservation(r);
+  const isDueForCheckIn = (r: Reservation) =>
+    isActiveReservation(r) && (r.check_in || '') <= operationDayISO;
+  const isOverdueCheckIn = (r: Reservation) =>
+    isActiveReservation(r) && (r.check_in || '') < operationDayISO;
+
   const filteredByStatus = {
-    checkin: reservations.filter(r => r.status === 'CONFIRMED' && !isSystemReservation(r)),
+    checkin: reservations.filter(isDueForCheckIn),
     contas: reservations.filter(r => r.status === 'CHECKED_IN' && !isSystemReservation(r)),
     historico: reservations.filter(r => r.status === 'CHECKED_OUT' && !isSystemReservation(r)),
   };
+
+  const overdueCheckins = reservations.filter(isOverdueCheckIn);
+  const futureCheckins = reservations.filter(r => isActiveReservation(r) && (r.check_in || '') > operationDayISO);
 
   const systemReservations = reservations.filter(isSystemReservation);
   const ccReservation = systemReservations.find(r => r.reservation_code === 'SYS-CC') || null;
@@ -595,33 +606,79 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
         <div className="flex justify-center py-12">
           <Loader2 className="w-6 h-6 animate-spin text-neutral-400" />
         </div>
-      ) : visibleList.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-neutral-200">
-          <p className="text-sm font-bold text-neutral-400 uppercase tracking-widest">
-            {activeTab === 'checkin'   && 'Nenhuma reserva aguardando check-in'}
-            {activeTab === 'contas'    && 'Nenhuma conta aberta no momento'}
-            {activeTab === 'historico' && 'Nenhum check-out realizado'}
-          </p>
-        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {visibleList.map(r => (
+        <>
+          {activeTab === 'checkin' && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 p-3 bg-white border border-neutral-200 rounded-xl text-xs">
+                <div className="flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-neutral-500" />
+                  <span className="font-bold text-neutral-900">
+                    Dia de operação: {format(new Date(), "dd/MM/yyyy", { locale: ptBR })}
+                  </span>
+                </div>
+                <span className="h-4 w-px bg-neutral-200" />
+                <span className="text-neutral-600">
+                  <b>{filteredByStatus.checkin.length}</b> aguardando check-in
+                </span>
+                {overdueCheckins.length > 0 && (
+                  <span className="text-red-700 font-bold">
+                    · {overdueCheckins.length} em atraso
+                  </span>
+                )}
+                {futureCheckins.length > 0 && (
+                  <span className="text-neutral-400">
+                    · {futureCheckins.length} futura{futureCheckins.length === 1 ? '' : 's'} ocultas
+                  </span>
+                )}
+              </div>
+
+              {overdueCheckins.length > 0 && (
+                <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-xl">
+                  <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-red-800">
+                    <b>Auditoria noturna bloqueada.</b> Há {overdueCheckins.length} reserva{overdueCheckins.length === 1 ? '' : 's'} do dia com check-in pendente.
+                    Faça o check-in, marque como <b>No Show</b> ou <b>cancele</b> para destravar o fechamento do dia.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {visibleList.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-2xl border border-neutral-200">
+              <p className="text-sm font-bold text-neutral-400 uppercase tracking-widest">
+                {activeTab === 'checkin'   && 'Sem check-ins pendentes para hoje'}
+                {activeTab === 'contas'    && 'Nenhuma conta aberta no momento'}
+                {activeTab === 'historico' && 'Nenhum check-out realizado'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {visibleList.map(r => (
             <motion.div
               key={r.id}
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               className="bg-white border border-neutral-200 rounded-2xl p-5 hover:shadow-md transition-shadow"
             >
-              <div className="flex justify-between items-start mb-4">
-                <div className="flex items-center gap-2">
-                  <Hash className="w-3.5 h-3.5 text-neutral-400" />
-                  <span className="text-xs font-bold text-neutral-500">{r.reservation_code || '—'}</span>
+              <div className="flex justify-between items-start mb-4 gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Hash className="w-3.5 h-3.5 text-neutral-400 flex-shrink-0" />
+                  <span className="text-xs font-bold text-neutral-500 truncate">{r.reservation_code || '—'}</span>
                 </div>
-                {r.room_number && (
-                  <span className="px-2 py-0.5 bg-neutral-900 text-white text-xs font-bold rounded">
-                    UH {r.room_number}
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {activeTab === 'checkin' && isOverdueCheckIn(r) && (
+                    <span className="px-1.5 py-0.5 bg-red-100 text-red-700 text-[10px] font-bold rounded uppercase tracking-widest">
+                      Atrasado
+                    </span>
+                  )}
+                  {r.room_number && (
+                    <span className="px-2 py-0.5 bg-neutral-900 text-white text-xs font-bold rounded">
+                      UH {r.room_number}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2 mb-4">
@@ -683,7 +740,9 @@ export default function CheckInOutDashboard({ profile }: { profile: UserProfile 
               </div>
             </motion.div>
           ))}
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       <div className="text-[10px] text-neutral-400 uppercase tracking-widest">

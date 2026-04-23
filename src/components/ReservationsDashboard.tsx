@@ -8,6 +8,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { format, addDays, startOfToday, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { logAudit, sendNotification } from '../lib/audit';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Cell, Legend } from 'recharts';
 
 type Room = {
   id: string;
@@ -99,7 +100,7 @@ const buildAutoInvoiceHtml = ({
 </html>`;
 
 export default function ReservationsDashboard({ profile }: { profile: UserProfile }) {
-  const [activeSubTab, setActiveSubTab] = useState<'map' | 'requests'>('map');
+  const [activeSubTab, setActiveSubTab] = useState<'map' | 'requests' | 'ocupacao'>('map');
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [reservationRequests, setReservationRequests] = useState<ReservationRequest[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -515,21 +516,36 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
         >
           Mapa / Reservas Ativas
         </button>
+        <button
+          onClick={() => setActiveSubTab('ocupacao')}
+          className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            activeSubTab === 'ocupacao' ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500 hover:text-neutral-700'
+          }`}
+        >
+          Ocupação
+        </button>
       </div>
 
-      <div className="flex flex-col md:flex-row gap-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-          <input
-            type="text"
-            placeholder="Buscar por hóspede, quarto ou código..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 bg-white border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/5 transition-all"
-          />
+      {activeSubTab !== 'ocupacao' && (
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+            <input
+              type="text"
+              placeholder="Buscar por hóspede, quarto ou código..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 bg-white border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900/5 transition-all"
+            />
+          </div>
         </div>
-      </div>
+      )}
 
+      {activeSubTab === 'ocupacao' && (
+        <OcupacaoPanel reservations={reservations} rooms={rooms} />
+      )}
+
+      {activeSubTab !== 'ocupacao' && (
       <div className="bg-white rounded-2xl border border-neutral-200 shadow-sm overflow-hidden">
         {activeSubTab === 'requests' ? (
           <div className="divide-y divide-neutral-100">
@@ -688,6 +704,7 @@ export default function ReservationsDashboard({ profile }: { profile: UserProfil
           </div>
         )}
       </div>
+      )}
 
       {voucherReservation && (
         <ReservationVoucher
@@ -1094,6 +1111,256 @@ function NovaReservaModal({
           </button>
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+function OcupacaoPanel({
+  reservations, rooms,
+}: {
+  reservations: Reservation[];
+  rooms: Room[];
+}) {
+  const [horizonDays, setHorizonDays] = useState<number>(30);
+  const [startOffsetDays, setStartOffsetDays] = useState<number>(0);
+
+  const physicalRooms = rooms.filter(r => !['CC', 'ADM'].includes(r.room_number));
+  const capacityByCategory: Record<string, number> = physicalRooms.reduce((acc, r) => {
+    const k = normalizeCategory(r.category);
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  const totalCapacity = physicalRooms.length;
+
+  const activeReservations = reservations.filter(r =>
+    r.status === 'CONFIRMED' ||
+    r.status === 'PENDING' ||
+    r.status === 'CHECKED_IN'
+  );
+
+  const today = startOfToday();
+  const data = Array.from({ length: horizonDays }, (_, i) => {
+    const day = addDays(today, i + startOffsetDays);
+    const dayISO = format(day, 'yyyy-MM-dd');
+
+    const occupied = activeReservations.filter(r =>
+      (r.check_in || '') <= dayISO && (r.check_out || '') > dayISO
+    );
+
+    const byCat: Record<string, number> = {};
+    occupied.forEach(r => {
+      const k = normalizeCategory(r.category || '');
+      byCat[k] = (byCat[k] || 0) + 1;
+    });
+
+    const total = occupied.length;
+    const pct = totalCapacity > 0 ? Math.round((total / totalCapacity) * 100) : 0;
+    const overbooked = total > totalCapacity;
+    const overbookedCategories = Object.entries(byCat)
+      .filter(([k, v]) => v > (capacityByCategory[k] || 0))
+      .map(([k]) => k);
+
+    return {
+      dateISO: dayISO,
+      label: format(day, 'dd/MM'),
+      dayOfWeek: format(day, 'EEE', { locale: ptBR }),
+      total,
+      pct,
+      capacity: totalCapacity,
+      overbooked,
+      overbookedCategories,
+      executivo: byCat['executivo'] || 0,
+      master: byCat['master'] || 0,
+      suite: byCat['suite presidencial'] || 0,
+    };
+  });
+
+  const overbookedDays = data.filter(d => d.overbooked).length;
+  const avgOccupancy = data.length > 0
+    ? Math.round(data.reduce((s, d) => s + d.pct, 0) / data.length)
+    : 0;
+  const peakDay = data.reduce((best, d) => (d.total > (best?.total ?? -1) ? d : best), data[0]);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+        <div className="bg-white border border-neutral-200 rounded-2xl p-4">
+          <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Capacidade total</p>
+          <p className="text-2xl font-bold text-neutral-900 mt-1 tabular-nums">{totalCapacity}</p>
+          <p className="text-[10px] text-neutral-500 mt-0.5">
+            Exec {capacityByCategory['executivo'] || 0} · Mst {capacityByCategory['master'] || 0} · Suíte {capacityByCategory['suite presidencial'] || 0}
+          </p>
+        </div>
+        <div className="bg-white border border-neutral-200 rounded-2xl p-4">
+          <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Ocupação média</p>
+          <p className="text-2xl font-bold text-neutral-900 mt-1 tabular-nums">{avgOccupancy}%</p>
+          <p className="text-[10px] text-neutral-500 mt-0.5">próximos {horizonDays} dias</p>
+        </div>
+        <div className="bg-white border border-neutral-200 rounded-2xl p-4">
+          <p className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Pico previsto</p>
+          <p className="text-2xl font-bold text-neutral-900 mt-1 tabular-nums">
+            {peakDay ? `${peakDay.total}/${totalCapacity}` : '—'}
+          </p>
+          <p className="text-[10px] text-neutral-500 mt-0.5">
+            {peakDay ? `${peakDay.label} (${peakDay.dayOfWeek})` : '—'}
+          </p>
+        </div>
+        <div className={`border rounded-2xl p-4 ${overbookedDays > 0 ? 'bg-red-50 border-red-200' : 'bg-white border-neutral-200'}`}>
+          <p className={`text-[10px] font-bold uppercase tracking-widest ${overbookedDays > 0 ? 'text-red-700' : 'text-neutral-500'}`}>
+            Dias em overbooking
+          </p>
+          <p className={`text-2xl font-bold mt-1 tabular-nums ${overbookedDays > 0 ? 'text-red-700' : 'text-neutral-900'}`}>
+            {overbookedDays}
+          </p>
+          <p className="text-[10px] text-neutral-500 mt-0.5">
+            {overbookedDays > 0 ? 'verificar categorias' : 'sem conflitos'}
+          </p>
+        </div>
+      </div>
+
+      <div className="bg-white border border-neutral-200 rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="text-sm font-bold text-neutral-900">Ocupação diária prevista</h3>
+            <p className="text-[11px] text-neutral-500">
+              {format(addDays(today, startOffsetDays), 'dd/MM/yyyy')} → {format(addDays(today, startOffsetDays + horizonDays - 1), 'dd/MM/yyyy')}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 bg-neutral-100 p-1 rounded-lg">
+              {[15, 30, 60, 90].map(d => (
+                <button
+                  key={d}
+                  onClick={() => setHorizonDays(d)}
+                  className={`px-3 py-1 rounded text-[10px] font-bold ${horizonDays === d ? 'bg-white text-neutral-900 shadow-sm' : 'text-neutral-500'}`}
+                >
+                  {d}d
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setStartOffsetDays(v => Math.max(-30, v - horizonDays))}
+                className="p-1.5 rounded-lg hover:bg-neutral-100 border border-neutral-200"
+                title="Período anterior"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setStartOffsetDays(0)}
+                className="px-3 py-1.5 rounded-lg border border-neutral-200 text-[10px] font-bold hover:bg-neutral-50"
+              >
+                Hoje
+              </button>
+              <button
+                onClick={() => setStartOffsetDays(v => v + horizonDays)}
+                className="p-1.5 rounded-lg hover:bg-neutral-100 border border-neutral-200"
+                title="Próximo período"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer>
+            <BarChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: '#737373' }}
+                interval={horizonDays > 30 ? 2 : 0}
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: '#737373' }}
+                allowDecimals={false}
+                domain={[0, (dataMax: number) => Math.max(dataMax, totalCapacity)]}
+              />
+              <Tooltip
+                content={({ active, payload }) => {
+                  if (!active || !payload || !payload.length) return null;
+                  const d: any = payload[0].payload;
+                  return (
+                    <div className="bg-white border border-neutral-200 rounded-lg p-3 shadow-lg text-xs">
+                      <p className="font-bold text-neutral-900">{d.label} · {d.dayOfWeek}</p>
+                      <p className="text-neutral-600 mt-1">
+                        Ocupação: <b className={d.overbooked ? 'text-red-600' : 'text-neutral-900'}>{d.total}/{d.capacity}</b> ({d.pct}%)
+                      </p>
+                      <div className="text-[10px] text-neutral-500 mt-1">
+                        Exec {d.executivo} · Mst {d.master} · Suíte {d.suite}
+                      </div>
+                      {d.overbooked && (
+                        <p className="text-[10px] text-red-600 font-bold mt-1">
+                          ⚠ Overbooking{d.overbookedCategories.length > 0 ? ` · ${d.overbookedCategories.join(', ')}` : ''}
+                        </p>
+                      )}
+                    </div>
+                  );
+                }}
+              />
+              <ReferenceLine y={totalCapacity} stroke="#dc2626" strokeDasharray="4 4" label={{ value: `Capacidade ${totalCapacity}`, fill: '#dc2626', fontSize: 10, position: 'insideTopRight' }} />
+              <Bar dataKey="total" radius={[4, 4, 0, 0]}>
+                {data.map((d, i) => (
+                  <Cell key={i} fill={d.overbooked ? '#dc2626' : d.pct >= 85 ? '#f59e0b' : '#171717'} />
+                ))}
+              </Bar>
+              <Legend
+                verticalAlign="bottom"
+                height={24}
+                payload={[
+                  { value: 'Ocupação normal', type: 'square', color: '#171717' },
+                  { value: 'Alta (≥85%)', type: 'square', color: '#f59e0b' },
+                  { value: 'Overbooking', type: 'square', color: '#dc2626' },
+                ]}
+                wrapperStyle={{ fontSize: 10 }}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="bg-white border border-neutral-200 rounded-2xl p-5">
+        <h3 className="text-sm font-bold text-neutral-900 mb-3">Ocupação por categoria</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[9px] font-bold text-neutral-500 uppercase tracking-widest border-b border-neutral-200">
+                <th className="py-2 pr-3">Data</th>
+                <th className="py-2 px-3 text-right">Total</th>
+                <th className="py-2 px-3 text-right">Executivo</th>
+                <th className="py-2 px-3 text-right">Master</th>
+                <th className="py-2 px-3 text-right">Suíte</th>
+                <th className="py-2 pl-3 text-right">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map(d => (
+                <tr key={d.dateISO} className={`border-b border-neutral-100 ${d.overbooked ? 'bg-red-50' : ''}`}>
+                  <td className="py-1.5 pr-3 font-bold text-neutral-700">
+                    {d.label} <span className="text-neutral-400 font-normal">· {d.dayOfWeek}</span>
+                  </td>
+                  <td className={`py-1.5 px-3 text-right tabular-nums font-bold ${d.overbooked ? 'text-red-700' : 'text-neutral-900'}`}>
+                    {d.total}/{d.capacity}
+                  </td>
+                  <td className={`py-1.5 px-3 text-right tabular-nums ${d.executivo > (capacityByCategory['executivo'] || 0) ? 'text-red-700 font-bold' : 'text-neutral-600'}`}>
+                    {d.executivo}/{capacityByCategory['executivo'] || 0}
+                  </td>
+                  <td className={`py-1.5 px-3 text-right tabular-nums ${d.master > (capacityByCategory['master'] || 0) ? 'text-red-700 font-bold' : 'text-neutral-600'}`}>
+                    {d.master}/{capacityByCategory['master'] || 0}
+                  </td>
+                  <td className={`py-1.5 px-3 text-right tabular-nums ${d.suite > (capacityByCategory['suite presidencial'] || 0) ? 'text-red-700 font-bold' : 'text-neutral-600'}`}>
+                    {d.suite}/{capacityByCategory['suite presidencial'] || 0}
+                  </td>
+                  <td className={`py-1.5 pl-3 text-right tabular-nums font-bold ${d.overbooked ? 'text-red-700' : d.pct >= 85 ? 'text-amber-700' : 'text-neutral-900'}`}>
+                    {d.pct}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
