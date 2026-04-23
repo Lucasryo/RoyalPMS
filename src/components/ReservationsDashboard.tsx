@@ -1124,7 +1124,9 @@ function OcupacaoPanel({
   const [horizonDays, setHorizonDays] = useState<number>(30);
   const [startOffsetDays, setStartOffsetDays] = useState<number>(0);
 
-  const physicalRooms = rooms.filter(r => !['CC', 'ADM'].includes(r.room_number));
+  const SYSTEM_CODES = new Set(['SYS-CC', 'SYS-ADM']);
+  const VIRTUAL_ROOMS = new Set(['CC', 'ADM']);
+  const physicalRooms = rooms.filter(r => !VIRTUAL_ROOMS.has(r.room_number) && normalizeCategory(r.category) !== 'sistema');
   const capacityByCategory: Record<string, number> = physicalRooms.reduce((acc, r) => {
     const k = normalizeCategory(r.category);
     acc[k] = (acc[k] || 0) + 1;
@@ -1133,9 +1135,9 @@ function OcupacaoPanel({
   const totalCapacity = physicalRooms.length;
 
   const activeReservations = reservations.filter(r =>
-    r.status === 'CONFIRMED' ||
-    r.status === 'PENDING' ||
-    r.status === 'CHECKED_IN'
+    (r.status === 'CONFIRMED' || r.status === 'PENDING' || r.status === 'CHECKED_IN') &&
+    !SYSTEM_CODES.has(r.reservation_code || '') &&
+    !VIRTUAL_ROOMS.has(r.room_number || '')
   );
 
   const today = startOfToday();

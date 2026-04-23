@@ -55,6 +55,8 @@ export function canAccessView(
       return hasPermission(profile, 'canViewStaff', ['admin']);
     case 'fiscal':
       return false; // apenas admin — já tratado acima
+    case 'caixa':
+      return hasPermission(profile, 'canViewFinance', ['admin', 'faturamento', 'finance', 'reservations']);
     case 'audit':
       return false;
     case 'profile':

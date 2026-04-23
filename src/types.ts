@@ -1,4 +1,4 @@
-export type ViewType = 'dashboard' | 'reservations' | 'guests' | 'companies' | 'finance' | 'staff' | 'settings' | 'tariffs' | 'tracking' | 'registration' | 'events';
+export type ViewType = 'dashboard' | 'reservations' | 'guests' | 'companies' | 'finance' | 'staff' | 'settings' | 'tariffs' | 'tracking' | 'registration' | 'events' | 'caixa';
 
 export interface HotelEvent {
   id: string;

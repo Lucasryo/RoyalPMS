@@ -16,12 +16,13 @@ import DashboardOverview from './components/DashboardOverview';
 import Profile from './components/Profile';
 import AuditDashboard from './components/AuditDashboard';
 import CheckInOutDashboard from './components/CheckInOutDashboard';
+import CaixaDashboard from './components/CaixaDashboard';
 import FiscalSettings from './components/FiscalSettings';
 import {
   Loader2, User as UserIcon, LogOut, Search, X as CloseIcon,
   Building2, FileText, Users, Sparkles, LayoutDashboard,
   CalendarDays, UserCircle, Settings, Menu, Bell, Search as SearchIcon,
-  ChevronRight, Hotel, Globe, ShieldCheck, UserPlus, DollarSign, KeyRound, Receipt
+  ChevronRight, Hotel, Globe, ShieldCheck, UserPlus, DollarSign, KeyRound, Receipt, Wallet
 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { tryFocusElement, consumeFocusTarget } from './lib/focusTarget';
@@ -29,7 +30,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 type User = { id: string; email?: string; [key: string]: any };
 
-type ViewType = 'dashboard' | 'reservations' | 'guests' | 'companies' | 'finance' | 'staff' | 'settings' | 'tariffs' | 'tracking' | 'registration' | 'events' | 'audit' | 'checkin' | 'fiscal';
+type ViewType = 'dashboard' | 'reservations' | 'guests' | 'companies' | 'finance' | 'staff' | 'settings' | 'tariffs' | 'tracking' | 'registration' | 'events' | 'audit' | 'checkin' | 'fiscal' | 'caixa';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -217,7 +218,7 @@ export default function App() {
   useEffect(() => {
     if (!profile) return;
     if (!canAccessView(profile, currentView)) {
-      const order: ViewType[] = ['dashboard', 'reservations', 'checkin', 'events', 'guests', 'companies', 'tracking', 'finance', 'registration', 'staff', 'audit'];
+      const order: ViewType[] = ['dashboard', 'reservations', 'checkin', 'caixa', 'events', 'guests', 'companies', 'tracking', 'finance', 'registration', 'staff', 'audit'];
       const next = order.find(v => canAccessView(profile, v));
       if (next && next !== currentView) setCurrentView(next);
     }
@@ -252,6 +253,7 @@ export default function App() {
       { id: 'dashboard' as ViewType, label: 'Painel', icon: LayoutDashboard },
       { id: 'reservations' as ViewType, label: 'Reservas', icon: CalendarDays },
       { id: 'checkin' as ViewType, label: 'Check-in/out', icon: KeyRound },
+      { id: 'caixa' as ViewType, label: 'Caixa', icon: Wallet },
       { id: 'events' as ViewType, label: 'Eventos', icon: Globe },
       { id: 'guests' as ViewType, label: 'Hóspedes', icon: UserCircle },
       { id: 'companies' as ViewType, label: 'Empresas', icon: Building2 },
@@ -296,6 +298,7 @@ export default function App() {
       case 'profile': return <Profile profile={profile} onBack={() => setCurrentView('dashboard')} />;
       case 'reservations': return profile.role === 'client' ? <ClientDashboard profile={profile} initialTab="reservations" /> : <ReservationsDashboard profile={profile} />;
       case 'checkin': return <CheckInOutDashboard profile={profile} />;
+      case 'caixa': return <CaixaDashboard profile={profile} />;
       case 'guests': return <AdminDashboard profile={profile} initialTab="guests" />;
       case 'tracking': return <AdminDashboard profile={profile} initialTab="tracking" />;
       case 'tariffs': return <AdminDashboard profile={profile} initialTab="tariffs" />;
