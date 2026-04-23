@@ -89,6 +89,7 @@ export interface UserProfile {
   phone?: string;
   company_name?: string;
   permissions?: UserPermissions;
+  status?: 'active' | 'inactive';
 }
 
 export interface AuditLog {
